@@ -17,6 +17,14 @@ interface Lesson {
   started_at: string | null;
 }
 
+interface Progress {
+  problems_completed: number;
+  total_problems: number;
+  current_objective_index: number;
+  current_objective: string;
+  percentage: number;
+}
+
 const Student: React.FC = () => {
   // === USE PERSISTENT STATE FROM APP ===
   const { 
@@ -30,6 +38,7 @@ const Student: React.FC = () => {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [lessonsLoading, setLessonsLoading] = useState(false);
   const [startingLesson, setStartingLesson] = useState<number | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
 
   // Fetch available lessons on mount
   useEffect(() => {
@@ -150,16 +159,25 @@ const Student: React.FC = () => {
                 }
               } else if (data.type === 'content') {
                 accumulatedContent += data.content;
-                
+
                 // Update the bot message in real-time
                 setChatLog(prevLog => {
                   const updatedLog = [...prevLog];
                   updatedLog[botMessageIndex] = { role: 'bot', content: accumulatedContent };
                   return updatedLog;
                 });
+
+                // Update progress if provided
+                if (data.progress) {
+                  setProgress(data.progress);
+                }
               } else if (data.type === 'done') {
                 if (data.thread_id) {
                     setThreadId(data.thread_id);
+                }
+                // Update progress from done event
+                if (data.progress) {
+                  setProgress(data.progress);
                 }
               } else if (data.type === 'error') {
                 console.error('Error from server:', data.error);
@@ -251,6 +269,26 @@ const Student: React.FC = () => {
                 </div>
               ))
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Progress Bar Section */}
+      {progress && (
+        <div className="card bg-base-200 shadow-xl mb-4 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-semibold text-primary">{progress.current_objective}</span>
+            <span className="text-sm text-base-content/70">
+              {progress.problems_completed}/{progress.total_problems} problems
+            </span>
+          </div>
+          <progress
+            className="progress progress-primary w-full"
+            value={progress.percentage}
+            max="100"
+          ></progress>
+          <div className="text-xs text-base-content/60 mt-1 text-right">
+            {progress.percentage}% complete
           </div>
         </div>
       )}

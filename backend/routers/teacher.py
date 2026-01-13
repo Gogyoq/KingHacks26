@@ -487,6 +487,69 @@ async def deactivate_category(category_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/files/delete-all")
+async def delete_all_files():
+    """
+    Delete ALL files from database, filesystem, AND Backboard.
+    This clears all indexed and processing documents.
+    """
+    try:
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        # Get all files with their Backboard doc IDs
+        c.execute("SELECT id, file_path, backboard_doc_id FROM files")
+        files_to_delete = c.fetchall()
+
+        deleted_count = 0
+        backboard_deleted = 0
+        errors = []
+
+        async with httpx.AsyncClient() as client:
+            for file_row in files_to_delete:
+                file_path = Path(file_row["file_path"])
+                backboard_doc_id = file_row["backboard_doc_id"]
+
+                # Delete from Backboard if it exists there
+                if backboard_doc_id:
+                    try:
+                        response = await client.delete(
+                            f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}",
+                            headers={"X-API-Key": BACKBOARD_API_KEY},
+                            timeout=30.0
+                        )
+                        if response.status_code == 200:
+                            backboard_deleted += 1
+                        else:
+                            errors.append(f"Backboard delete failed for {backboard_doc_id}: {response.status_code}")
+                    except Exception as e:
+                        errors.append(f"Backboard delete error for {backboard_doc_id}: {e}")
+
+                # Delete physical file
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                except Exception as e:
+                    errors.append(f"File delete error for {file_path}: {e}")
+
+                deleted_count += 1
+
+        # Delete all from database
+        c.execute("DELETE FROM files")
+        conn.commit()
+        conn.close()
+
+        return {
+            "message": f"Deleted {deleted_count} files",
+            "files_deleted": deleted_count,
+            "backboard_deleted": backboard_deleted,
+            "errors": errors if errors else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/files/{file_id}/category")
 async def update_file_category(file_id: int, update: FileCategoryUpdate):
     """

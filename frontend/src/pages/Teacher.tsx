@@ -470,6 +470,22 @@ const Teacher: React.FC = () => {
     }
   };
 
+  const handleDeleteAllFiles = async () => {
+    if (!confirm('Are you sure you want to delete ALL files? This will remove them from the database, filesystem, AND Backboard AI. This action cannot be undone!')) return;
+
+    setLoading(true);
+    try {
+      const response = await axios.delete('http://localhost:8000/teacher/files/delete-all');
+      await fetchFiles();
+      alert(`Successfully deleted ${response.data.files_deleted} files (${response.data.backboard_deleted} from Backboard)`);
+    } catch (err: any) {
+      console.error("Failed to delete all files", err);
+      alert(`Failed to delete files: ${err.response?.data?.detail || err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   const getFilesForCategory = (categoryId: number | null) => {
     return files.filter(f => f.category_id === categoryId);
@@ -628,7 +644,25 @@ const Teacher: React.FC = () => {
       {/* File Management Section */}
       <div className="card bg-base-100 shadow-xl">
         <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">File Management</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="card-title text-2xl">File Management</h2>
+            {files.length > 0 && (
+              <button
+                onClick={handleDeleteAllFiles}
+                disabled={loading}
+                className="btn btn-error btn-sm"
+              >
+                {loading ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs"></span>
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete All Files'
+                )}
+              </button>
+            )}
+          </div>
 
           {/* Uncategorized Files */}
           <div className="mb-6">

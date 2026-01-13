@@ -114,6 +114,19 @@ def init_db():
                   last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   UNIQUE(student_id, file_id))''')
 
+    # Add progress tracking columns to student_conversations (migration)
+    progress_columns = [
+        ("story_plan", "TEXT"),  # JSON string of the story plan
+        ("current_objective_index", "INTEGER DEFAULT 0"),
+        ("problems_completed", "INTEGER DEFAULT 0"),
+        ("total_problems", "INTEGER DEFAULT 0"),
+    ]
+    for col_name, col_type in progress_columns:
+        try:
+            c.execute(f"ALTER TABLE student_conversations ADD COLUMN {col_name} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
     conn.commit()
     conn.close()
 
