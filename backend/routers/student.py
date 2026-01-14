@@ -983,6 +983,154 @@ async def get_conversation_messages(conversation_id: int, current_user: User = D
     }
 
 
+@router.post("/hint/{conversation_id}")
+async def get_hint(conversation_id: int, authorization: Optional[str] = Header(None)):
+    """Get an in-depth hint for the current question without revealing the answer."""
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please log in to get hints")
+
+    try:
+        # Verify conversation belongs to user
+        conv = get_conversation_by_id(conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if conv['student_id'] != user_id:
+            raise HTTPException(status_code=403, detail="You can only get hints for your own conversations")
+
+        thread_id = conv['thread_id']
+
+        # Get stored question data
+        stored_data = thread_expected_answers.get(thread_id)
+        if not stored_data:
+            raise HTTPException(status_code=400, detail="No active question found. Please answer a question first.")
+
+        # Record hint usage
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+        c.execute("""
+            UPDATE student_conversations
+            SET hints_used = COALESCE(hints_used, 0) + 1
+            WHERE id = ?
+        """, (conversation_id,))
+        conn.commit()
+        conn.close()
+
+        # Generate a more detailed hint
+        question = stored_data.get('question', '')
+        basic_hint = stored_data.get('hint', '')
+
+        # Create a detailed hint based on the question type
+        detailed_hint = f"{basic_hint}\n\nThink about the problem step by step. What operation do you need to use?"
+
+        return {
+            "hint": detailed_hint,
+            "question": question
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/solve/{conversation_id}")
+async def solve_question(conversation_id: int, authorization: Optional[str] = Header(None)):
+    """Reveal the answer to the current question. This is recorded for teacher visibility."""
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please log in")
+
+    try:
+        # Verify conversation belongs to user
+        conv = get_conversation_by_id(conversation_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if conv['student_id'] != user_id:
+            raise HTTPException(status_code=403, detail="You can only solve your own questions")
+
+        # Check if solve is enabled for this lesson
+        file_id = conv.get('file_id')
+        if file_id:
+            conn = sqlite3.connect('chat_history.db')
+            c = conn.cursor()
+            c.execute("SELECT solve_enabled FROM files WHERE id = ?", (file_id,))
+            row = c.fetchone()
+            conn.close()
+            if row and row[0] == 0:
+                raise HTTPException(status_code=403, detail="Solve feature is disabled for this lesson")
+
+        thread_id = conv['thread_id']
+
+        # Get stored question data
+        stored_data = thread_expected_answers.get(thread_id)
+        if not stored_data:
+            raise HTTPException(status_code=400, detail="No active question found")
+
+        expected_answer = stored_data.get('expected_answer', 'Unknown')
+        question = stored_data.get('question', '')
+        hint = stored_data.get('hint', '')
+
+        # Record solve usage
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+        c.execute("""
+            UPDATE student_conversations
+            SET solves_used = COALESCE(solves_used, 0) + 1
+            WHERE id = ?
+        """, (conversation_id,))
+
+        # Also save a message indicating the student requested the solution
+        c.execute(
+            "INSERT INTO conversation_messages (conversation_id, role, content, is_wrong) VALUES (?, ?, ?, ?)",
+            (conversation_id, 'user', '[Student requested solution]', 1)
+        )
+        conn.commit()
+        conn.close()
+
+        return {
+            "answer": expected_answer,
+            "explanation": f"The question was: {question}\n\nHint for next time: {hint}",
+            "question": question
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/lesson/{file_id}/settings")
+async def get_lesson_settings(file_id: int, authorization: Optional[str] = Header(None)):
+    """Get settings for a specific lesson (e.g., whether solve is enabled)."""
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please log in")
+
+    try:
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+        c.execute("SELECT solve_enabled FROM files WHERE id = ?", (file_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Lesson not found")
+
+        return {
+            "file_id": file_id,
+            "solve_enabled": row[0] if row[0] is not None else True
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/end-chat/{conversation_id}")
 async def end_chat(conversation_id: int, authorization: Optional[str] = Header(None)):
     """Mark a conversation as ended in the database."""

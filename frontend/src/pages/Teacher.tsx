@@ -19,6 +19,7 @@ interface FileItem {
   category_name: string | null;
   backboard_doc_id: string | null;
   backboard_status: string | null;
+  solve_enabled: boolean | null;
 }
 
 interface Instruction {
@@ -653,6 +654,25 @@ const Teacher: React.FC = () => {
     }
   };
 
+  const handleToggleSolve = async (fileId: number) => {
+    try {
+      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+      await axios.post(
+        `http://localhost:8000/teacher/files/${fileId}/toggle-solve`,
+        {},
+        {
+          headers: {
+            ...(token && { 'Authorization': `Bearer ${token}` }),
+          },
+        }
+      );
+      await fetchFiles();
+    } catch (err: any) {
+      console.error("Failed to toggle solve", err);
+      alert(`Failed to toggle solve: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
 
   const getFilesForCategory = (categoryId: number | null) => {
     return files.filter(f => f.category_id === categoryId);
@@ -1048,7 +1068,7 @@ const Teacher: React.FC = () => {
                           {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         <select
                           className="select select-bordered select-sm"
                           value={file.category_id || ''}
@@ -1064,6 +1084,13 @@ const Teacher: React.FC = () => {
                           className={`btn btn-sm ${file.is_active ? 'btn-success' : 'btn-outline'}`}
                         >
                           {file.is_active ? 'Active' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => handleToggleSolve(file.id)}
+                          className={`btn btn-sm ${file.solve_enabled !== false ? 'btn-warning' : 'btn-outline'}`}
+                          title={file.solve_enabled !== false ? 'Students can use Show Answer' : 'Show Answer is disabled'}
+                        >
+                          {file.solve_enabled !== false ? 'Solve On' : 'Solve Off'}
                         </button>
                         <button
                           onClick={() => handleDeleteFile(file.id)}
@@ -1100,7 +1127,7 @@ const Teacher: React.FC = () => {
                             {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
                           </p>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 flex-wrap">
                           <select
                             className="select select-bordered select-sm"
                             value={file.category_id || ''}
@@ -1116,6 +1143,13 @@ const Teacher: React.FC = () => {
                             className={`btn btn-sm ${file.is_active ? 'btn-success' : 'btn-outline'}`}
                           >
                             {file.is_active ? 'Active' : 'Activate'}
+                          </button>
+                          <button
+                            onClick={() => handleToggleSolve(file.id)}
+                            className={`btn btn-sm ${file.solve_enabled !== false ? 'btn-warning' : 'btn-outline'}`}
+                            title={file.solve_enabled !== false ? 'Students can use Show Answer' : 'Show Answer is disabled'}
+                          >
+                            {file.solve_enabled !== false ? 'Solve On' : 'Solve Off'}
                           </button>
                           <button
                             onClick={() => handleDeleteFile(file.id)}

@@ -19,10 +19,10 @@ interface Lesson {
 
 const Student: React.FC = () => {
   // === USE PERSISTENT STATE FROM APP ===
-  const { 
-    chatLog, setChatLog, 
-    threadId, setThreadId, 
-    conversationId, setConversationId 
+  const {
+    chatLog, setChatLog,
+    threadId, setThreadId,
+    conversationId, setConversationId
   } = useOutletContext<ChatContextType>();
 
   const [message, setMessage] = useState('');
@@ -32,6 +32,10 @@ const Student: React.FC = () => {
   const [startingLesson, setStartingLesson] = useState<number | null>(null);
   const [isChatEnded, setIsChatEnded] = useState(false);
   const [selectedLessonId, setSelectedLessonId] = useState<number | null>(null);
+  const [hintLoading, setHintLoading] = useState(false);
+  const [solveLoading, setSolveLoading] = useState(false);
+  const [solveEnabled, setSolveEnabled] = useState(true);
+  const [chatStarted, setChatStarted] = useState(false);
 
   // Fetch available lessons on mount
   useEffect(() => {
@@ -75,7 +79,8 @@ const Student: React.FC = () => {
           setThreadId(conv?.thread_id || null);
           setChatLog(chatLogMessages);
           setIsChatEnded(conv?.ended_at ? true : false);
-          
+          setChatStarted(chatLogMessages.length > 0);
+
           console.log(`Loaded chat for lesson ${fileId}: ${chatLogMessages.length} messages, conversation ${conv?.id || 'new'}`);
         }
       } else {
@@ -85,6 +90,7 @@ const Student: React.FC = () => {
           setThreadId(null);
           setChatLog([]);
           setIsChatEnded(false);
+          setChatStarted(false);
         }
       }
     } catch (error) {
@@ -95,6 +101,7 @@ const Student: React.FC = () => {
         setThreadId(null);
         setChatLog([]);
         setIsChatEnded(false);
+        setChatStarted(false);
       }
     }
   };
@@ -206,6 +213,178 @@ const Student: React.FC = () => {
       }
     }
   };
+
+  // Start a new chat session automatically
+  const handleStartChat = async () => {
+    if (!selectedLessonId || isLoading || isChatEnded) return;
+
+    const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+    if (!token) {
+      alert('Please log in to start learning');
+      return;
+    }
+
+    setIsLoading(true);
+
+    // Add placeholder for bot response
+    setChatLog([{ role: 'bot', content: '' }]);
+
+    try {
+      const response = await fetch('http://localhost:8000/student/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          message: 'Start my lesson',
+          thread_id: null,
+          conversation_id: null,
+          file_id: selectedLessonId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === 'thread_id') {
+                setThreadId(data.thread_id);
+                if (data.conversation_id) {
+                  setConversationId(data.conversation_id);
+                }
+              } else if (data.type === 'content') {
+                accumulatedContent += data.content;
+                setChatLog([{ role: 'bot', content: accumulatedContent }]);
+              } else if (data.type === 'done') {
+                if (data.thread_id) {
+                  setThreadId(data.thread_id);
+                }
+                setChatStarted(true);
+              } else if (data.type === 'error') {
+                console.error('Error from server:', data.error);
+                setChatLog([{ role: 'bot', content: `Error: ${data.error}` }]);
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Start chat failed', err);
+      setChatLog([{ role: 'bot', content: 'Error: Failed to start lesson' }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Request a hint from the AI
+  const handleGetHint = async () => {
+    if (!conversationId || isLoading || isChatEnded) return;
+
+    const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+    if (!token) return;
+
+    setHintLoading(true);
+
+    try {
+      const response = await fetch(`http://localhost:8000/student/hint/${conversationId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Add hint as a bot message
+        setChatLog(prev => [...prev, { role: 'bot', content: `**Hint:** ${data.hint}` }]);
+      } else {
+        const error = await response.json();
+        alert('Failed to get hint: ' + (error.detail || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Get hint failed', err);
+      alert('Failed to get hint');
+    } finally {
+      setHintLoading(false);
+    }
+  };
+
+  // Request the solution from the AI
+  const handleSolve = async () => {
+    if (!conversationId || isLoading || isChatEnded || !solveEnabled) return;
+
+    if (!window.confirm('Are you sure you want to see the answer? This will be recorded.')) {
+      return;
+    }
+
+    const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+    if (!token) return;
+
+    setSolveLoading(true);
+
+    try {
+      const response = await fetch(`http://localhost:8000/student/solve/${conversationId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Add solution as a bot message
+        setChatLog(prev => [...prev, { role: 'bot', content: `**Solution:** The answer is **${data.answer}**\n\n${data.explanation}` }]);
+      } else {
+        const error = await response.json();
+        alert('Failed to get solution: ' + (error.detail || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Get solution failed', err);
+      alert('Failed to get solution');
+    } finally {
+      setSolveLoading(false);
+    }
+  };
+
+  // Check if solve is enabled for the current lesson
+  const checkSolveEnabled = async (fileId: number) => {
+    const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+    if (!token) return;
+
+    try {
+      const response = await fetch(`http://localhost:8000/student/lesson/${fileId}/settings`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSolveEnabled(data.solve_enabled !== false);
+      }
+    } catch (err) {
+      console.error('Failed to check solve setting', err);
+      setSolveEnabled(true); // Default to enabled
+    }
+  };
+
+  // Check solve setting when lesson changes
+  useEffect(() => {
+    if (selectedLessonId) {
+      checkSolveEnabled(selectedLessonId);
+    }
+  }, [selectedLessonId]);
 
   const sendMessage = async () => {
     if (!message || isLoading || isChatEnded) return;
@@ -379,9 +558,29 @@ const Student: React.FC = () => {
           <h2 className="card-title text-primary mb-2">Story Chat</h2>
           
           <div className="flex-1 overflow-y-auto space-y-4 pr-2">
-            {chatLog.length === 0 && (
+            {chatLog.length === 0 && selectedLessonId && (
                 <div className="text-center text-gray-500 mt-10">
-                    <p>Start a new story by saying hello!</p>
+                    <p className="mb-4">Ready to start learning?</p>
+                    <button
+                      className="btn btn-primary btn-lg"
+                      onClick={handleStartChat}
+                      disabled={isLoading || isChatEnded}
+                    >
+                      {isLoading ? (
+                        <>
+                          <span className="loading loading-spinner loading-sm"></span>
+                          Starting...
+                        </>
+                      ) : (
+                        'Start Lesson'
+                      )}
+                    </button>
+                </div>
+            )}
+
+            {chatLog.length === 0 && !selectedLessonId && (
+                <div className="text-center text-gray-500 mt-10">
+                    <p>Select a lesson above to begin!</p>
                 </div>
             )}
             
@@ -405,20 +604,56 @@ const Student: React.FC = () => {
         </div>
       </div>
 
+      {/* Hint and Solve buttons */}
+      {chatStarted && !isChatEnded && (
+        <div className="flex gap-2 mb-2">
+          <button
+            className="btn btn-info flex-1"
+            onClick={handleGetHint}
+            disabled={hintLoading || isLoading || !conversationId}
+          >
+            {hintLoading ? (
+              <>
+                <span className="loading loading-spinner loading-xs"></span>
+                Getting Hint...
+              </>
+            ) : (
+              'Get Hint'
+            )}
+          </button>
+          {solveEnabled && (
+            <button
+              className="btn btn-warning flex-1"
+              onClick={handleSolve}
+              disabled={solveLoading || isLoading || !conversationId}
+            >
+              {solveLoading ? (
+                <>
+                  <span className="loading loading-spinner loading-xs"></span>
+                  Solving...
+                </>
+              ) : (
+                'Show Answer'
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2">
-        <input 
-          type="text" 
+        <input
+          type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && !isLoading && !isChatEnded && sendMessage()}
-          placeholder={isChatEnded ? "Chat ended" : "Say something..."} 
+          placeholder={isChatEnded ? "Chat ended" : "Type your answer..."}
           className="input input-bordered flex-1"
-          disabled={isLoading || isChatEnded}
+          disabled={isLoading || isChatEnded || !chatStarted}
         />
-        <button 
+        <button
           className="btn btn-primary"
           onClick={sendMessage}
-          disabled={isLoading || !message || isChatEnded}
+          disabled={isLoading || !message || isChatEnded || !chatStarted}
         >
           {isLoading ? 'Sending...' : 'Send'}
         </button>

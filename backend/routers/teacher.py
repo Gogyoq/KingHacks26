@@ -140,7 +140,7 @@ async def list_files():
         c.execute("""
             SELECT f.id, f.filename, f.original_filename, f.file_size,
                    f.uploaded_at, f.is_active, f.category_id, c.name as category_name,
-                   f.backboard_doc_id, f.backboard_status
+                   f.backboard_doc_id, f.backboard_status, f.solve_enabled
             FROM files f
             LEFT JOIN categories c ON f.category_id = c.id
             ORDER BY f.uploaded_at DESC
@@ -719,6 +719,44 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/files/{file_id}/toggle-solve")
+async def toggle_solve_enabled(file_id: int):
+    """
+    Toggle whether the Solve button is enabled for this lesson.
+    When disabled, students cannot reveal answers for questions in this lesson.
+    """
+    try:
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+
+        # Toggle the solve_enabled value
+        c.execute("""
+            UPDATE files
+            SET solve_enabled = NOT COALESCE(solve_enabled, 1)
+            WHERE id = ?
+        """, (file_id,))
+
+        if c.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Get the new value
+        c.execute("SELECT solve_enabled FROM files WHERE id = ?", (file_id,))
+        new_value = c.fetchone()[0]
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "message": f"Solve button {'enabled' if new_value else 'disabled'} for this lesson",
+            "solve_enabled": bool(new_value)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/files/{file_id}/deactivate")
 async def deactivate_file(file_id: int):

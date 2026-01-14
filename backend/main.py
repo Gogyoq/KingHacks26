@@ -52,6 +52,7 @@ def init_db():
                   is_active BOOLEAN DEFAULT 0,
                   backboard_doc_id TEXT,
                   backboard_status TEXT DEFAULT 'not_uploaded',
+                  solve_enabled BOOLEAN DEFAULT 1,
                   FOREIGN KEY (category_id) REFERENCES categories(id))''')
 
     # Sessions table
@@ -79,7 +80,9 @@ def init_db():
                   started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   has_wrong_answers BOOLEAN DEFAULT 0,
-                  ended_at TIMESTAMP)''')
+                  ended_at TIMESTAMP,
+                  hints_used INTEGER DEFAULT 0,
+                  solves_used INTEGER DEFAULT 0)''')
     
     # Add ended_at column if it doesn't exist (migration for existing DBs)
     try:
@@ -90,6 +93,24 @@ def init_db():
     # Add file_id column if it doesn't exist (migration for existing DBs)
     try:
         c.execute("ALTER TABLE student_conversations ADD COLUMN file_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add hints_used column if it doesn't exist (migration for existing DBs)
+    try:
+        c.execute("ALTER TABLE student_conversations ADD COLUMN hints_used INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add solves_used column if it doesn't exist (migration for existing DBs)
+    try:
+        c.execute("ALTER TABLE student_conversations ADD COLUMN solves_used INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add solve_enabled column to files if it doesn't exist (migration for existing DBs)
+    try:
+        c.execute("ALTER TABLE files ADD COLUMN solve_enabled BOOLEAN DEFAULT 1")
     except sqlite3.OperationalError:
         pass  # Column already exists
 
