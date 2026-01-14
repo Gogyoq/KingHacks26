@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime
 import sqlite3
 from pydantic import BaseModel
-from .accounts import get_current_user, get_user_assistant_id, get_user_id_from_token,User, DB_PATH as ACCOUNTS_DB_PATH
+from .accounts import get_current_user, get_user_assistant_id, get_user_id_from_token, User, DB_PATH as ACCOUNTS_DB_PATH
 import httpx
 import os
 from typing import Optional
@@ -40,7 +40,6 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
     Saves files locally AND uploads to Backboard assistant for RAG.
     """
     user_id = get_user_id_from_token(authorization) if authorization else None
-
     user_assistant_id = get_user_assistant_id(user_id) if user_id else None
 
     if not user_id:
@@ -54,7 +53,7 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
             status_code=400,
             detail="Your account needs to be set up. Please contact support or re-register."
         )
-    
+
     try:
         uploaded_files = []
         conn = sqlite3.connect('chat_history.db')
@@ -78,6 +77,8 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
             # Upload to Backboard assistant for RAG
             backboard_doc_id = None
             backboard_status = "not_uploaded"
+            upload_error = None
+
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
@@ -86,6 +87,7 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
                         files={"file": (file.filename, file_content)},
                         timeout=60.0
                     )
+
                     if response.status_code == 200:
                         doc_data = response.json()
                         backboard_doc_id = doc_data.get("document_id")
@@ -94,19 +96,21 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
                     else:
                         print(f"Backboard upload failed: {response.status_code} - {response.text}")
                         backboard_status = "upload_failed"
+                        upload_error = f"Backboard API error: {response.status_code}"
             except Exception as e:
                 print(f"Backboard upload error: {e}")
                 backboard_status = "upload_error"
+                upload_error = str(e)
 
             # Save to database with Backboard document ID
             c.execute(
-                """INSERT INTO files
-                   (filename, original_filename, file_path, file_size, backboard_doc_id, backboard_status)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO files 
+                (filename, original_filename, file_path, file_size, backboard_doc_id, backboard_status) 
+                VALUES (?, ?, ?, ?, ?, ?)""",
                 (safe_filename, file.filename, str(file_path), file_size, backboard_doc_id, backboard_status)
             )
-            file_id = c.lastrowid
 
+            file_id = c.lastrowid
             uploaded_files.append({
                 "id": file_id,
                 "filename": safe_filename,
@@ -114,17 +118,30 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
                 "size": file_size,
                 "path": str(file_path),
                 "backboard_doc_id": backboard_doc_id,
-                "backboard_status": backboard_status
+                "backboard_status": backboard_status,
+                "upload_error": upload_error
             })
 
         conn.commit()
         conn.close()
 
+        # Create better success message based on upload results
+        success_count = sum(1 for f in uploaded_files if f['backboard_status'] in ['pending', 'processed', 'indexed'])
+        failed_count = len(uploaded_files) - success_count
+
+        if failed_count == 0:
+            message = f"{len(uploaded_files)} file(s) uploaded successfully and processing"
+        else:
+            message = f"{success_count} file(s) uploaded successfully, {failed_count} failed"
+
         return {
-            "message": f"{len(uploaded_files)} file(s) uploaded successfully",
+            "message": message,
             "files": uploaded_files,
-            "count": len(uploaded_files)
+            "count": len(uploaded_files),
+            "success_count": success_count,
+            "failed_count": failed_count
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
@@ -137,22 +154,24 @@ async def list_files():
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
-            SELECT f.id, f.filename, f.original_filename, f.file_size,
+            SELECT f.id, f.filename, f.original_filename, f.file_size, 
                    f.uploaded_at, f.is_active, f.category_id, c.name as category_name,
                    f.backboard_doc_id, f.backboard_status, f.solve_enabled
             FROM files f
             LEFT JOIN categories c ON f.category_id = c.id
             ORDER BY f.uploaded_at DESC
         """)
+        
         rows = c.fetchall()
         conn.close()
 
         files = [dict(row) for row in rows]
         return {"files": files, "count": len(files)}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/files/{file_id}/backboard-status")
 async def get_backboard_status(file_id: int, authorization: Optional[str] = Header(None)):
@@ -162,25 +181,18 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
     If status is 'error', automatically converts with LlamaIndex and re-uploads.
     """
     user_id = get_user_id_from_token(authorization) if authorization else None
-
     user_assistant_id = get_user_assistant_id(user_id) if user_id else None
 
     if not user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Please log in to start your learning adventure!"
-        )
-
+        raise HTTPException(status_code=401, detail="Please log in to start your learning adventure!")
     if not user_assistant_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Your account needs to be set up. Please contact support or re-register."
-        )
+        raise HTTPException(status_code=400, detail="Your account needs to be set up. Please contact support or re-register.")
 
     try:
-        conn = sqlite3.connect('chat_history.db')
+        conn = sqlite3.connect("chat_history.db")
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("SELECT id, file_path, original_filename, backboard_doc_id, backboard_status FROM files WHERE id = ?", (file_id,))
         row = c.fetchone()
 
@@ -188,7 +200,8 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
             conn.close()
             raise HTTPException(status_code=404, detail="File not found")
 
-        backboard_doc_id = row['backboard_doc_id']
+        backboard_doc_id = row["backboard_doc_id"]
+
         if not backboard_doc_id:
             conn.close()
             return {"status": "not_uploaded", "message": "File not uploaded to Backboard"}
@@ -205,22 +218,59 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
                 status_data = response.json()
                 new_status = status_data.get("status", "unknown")
 
-                # If error, auto-retry with LlamaIndex conversion
-                # Skip if already retrying or already converted (status contains our markers)
-                current_status = row['backboard_status']
-                if new_status == "error" and can_convert(row['original_filename']) and current_status not in ('converting', 'retrying', 'conversion_failed'):
-                    print(f"Auto-retrying file {file_id} with LlamaIndex conversion...")
+                current_status = row["backboard_status"]
+
+                # **FIX: Prevent infinite retries and handle markdown files directly**
+                if (new_status == "error" and 
+                    can_convert(row["original_filename"]) and 
+                    current_status not in ["converting", "retrying", "conversion_failed", "retry_failed", "pending", "processed"]):
+                    
+                    print(f"Auto-retrying file {file_id} with conversion...")
 
                     # Update status immediately to prevent duplicate retries
                     c.execute("UPDATE files SET backboard_status = 'retrying' WHERE id = ?", (file_id,))
                     conn.commit()
 
                     try:
-                        # Convert to markdown
-                        new_filename, md_content = convert_document_to_markdown(
-                            row['file_path'],
-                            row['original_filename']
-                        )
+                        filepath = row["file_path"]
+                        original_filename = row["original_filename"]
+                        ext = Path(original_filename).suffix.lower()
+
+                        # **FIX: Handle markdown files directly - no conversion needed**
+                        if ext == '.md':
+                            print(f"File is already markdown, reading directly: {original_filename}")
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                md_content = f.read().encode('utf-8')
+                            new_filename = original_filename
+                        
+                        # **FIX: Handle text files directly**
+                        elif ext == '.txt':
+                            print(f"Reading text file: {original_filename}")
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                md_content = f.read().encode('utf-8')
+                            new_filename = Path(original_filename).stem + '.md'
+                        
+                        # For other formats, try to use the utils conversion
+                        else:
+                            try:
+                                new_filename, md_content = convert_document_to_markdown(filepath, original_filename)
+                            except Exception as conv_error:
+                                print(f"Conversion failed: {conv_error}")
+                                raise Exception(f"Cannot convert {ext} files: {conv_error}")
+
+                        # Delete the old failed document first to free up space
+                        try:
+                            delete_response = await client.delete(
+                                f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}",
+                                headers={"X-API-Key": BACKBOARD_API_KEY},
+                                timeout=30.0
+                            )
+                            if delete_response.status_code == 200:
+                                print(f"Deleted old failed document: {backboard_doc_id}")
+                            else:
+                                print(f"Warning: Could not delete old document: {delete_response.text}")
+                        except Exception as del_error:
+                            print(f"Warning: Error deleting old document: {del_error}")
 
                         # Re-upload to Backboard
                         retry_response = await client.post(
@@ -240,6 +290,7 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
                                 (new_doc_id, new_status, file_id)
                             )
                             conn.commit()
+
                             print(f"Auto-retry successful: {new_doc_id} - {new_status}")
 
                             conn.close()
@@ -251,20 +302,30 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
                                 "converted_filename": new_filename
                             }
                         else:
-                            new_status = "conversion_failed"
-                            print(f"Auto-retry upload failed: {retry_response.text}")
+                            new_status = "retry_failed"
+                            error_detail = retry_response.text
+                            print(f"Auto-retry upload failed: {error_detail}")
+                            
+                            if "maximum file limit" in error_detail.lower():
+                                new_status = "file_limit_reached"
+                                print("Backboard file limit reached - cannot upload more files")
+
                     except Exception as e:
                         new_status = "conversion_failed"
                         print(f"Auto-retry conversion error: {e}")
 
-                # Update local database
-                c.execute(
-                    "UPDATE files SET backboard_status = ? WHERE id = ?",
-                    (new_status, file_id)
-                )
-                conn.commit()
-                conn.close()
+                    # Update with failure status to prevent further retries
+                    c.execute("UPDATE files SET backboard_status = ? WHERE id = ?", (new_status, file_id))
+                    conn.commit()
+                
+                # **FIX: Update database with the latest status from Backboard**
+                else:
+                    # Only update if status changed to avoid unnecessary writes
+                    if current_status != new_status:
+                        c.execute("UPDATE files SET backboard_status = ? WHERE id = ?", (new_status, file_id))
+                        conn.commit()
 
+                conn.close()
                 return {
                     "file_id": file_id,
                     "backboard_doc_id": backboard_doc_id,
@@ -279,20 +340,18 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
                     "status": "error",
                     "message": f"Failed to fetch status: {response.status_code}"
                 }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/backboard/documents")
 async def list_backboard_documents(authorization: Optional[str] = Header(None)):
     """
     List all documents attached to the Backboard assistant.
     """
-
     user_id = get_user_id_from_token(authorization) if authorization else None
-
     user_assistant_id = get_user_assistant_id(user_id) if user_id else None
 
     if not user_id:
@@ -306,7 +365,7 @@ async def list_backboard_documents(authorization: Optional[str] = Header(None)):
             status_code=400,
             detail="Your account needs to be set up. Please contact support or re-register."
         )
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -323,11 +382,11 @@ async def list_backboard_documents(authorization: Optional[str] = Header(None)):
                     status_code=response.status_code,
                     detail=f"Failed to fetch documents: {response.text}"
                 )
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/files/{file_id}/retry-backboard")
 async def retry_backboard_upload(file_id: int, authorization: Optional[str] = Header(None)):
@@ -335,9 +394,7 @@ async def retry_backboard_upload(file_id: int, authorization: Optional[str] = He
     Retry uploading a failed document to Backboard.
     If the original upload failed, converts PDF to markdown and re-uploads.
     """
-
     user_id = get_user_id_from_token(authorization) if authorization else None
-
     user_assistant_id = get_user_assistant_id(user_id) if user_id else None
 
     if not user_id:
@@ -362,6 +419,7 @@ async def retry_backboard_upload(file_id: int, authorization: Optional[str] = He
             SELECT id, file_path, original_filename, backboard_doc_id, backboard_status
             FROM files WHERE id = ?
         """, (file_id,))
+        
         row = c.fetchone()
 
         if not row:
@@ -399,6 +457,7 @@ async def retry_backboard_upload(file_id: int, authorization: Optional[str] = He
                     files={"file": (new_filename, md_content, "text/markdown")},
                     timeout=60.0
                 )
+
                 if response.status_code == 200:
                     doc_data = response.json()
                     backboard_doc_id = doc_data.get("document_id")
@@ -419,10 +478,11 @@ async def retry_backboard_upload(file_id: int, authorization: Optional[str] = He
 
         # Update database with new document ID
         c.execute("""
-            UPDATE files
+            UPDATE files 
             SET backboard_doc_id = ?, backboard_status = ?
             WHERE id = ?
         """, (backboard_doc_id, backboard_status, file_id))
+
         conn.commit()
         conn.close()
 
@@ -449,12 +509,15 @@ async def list_categories():
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("SELECT * FROM categories ORDER BY created_at ASC")
+        
         rows = c.fetchall()
         conn.close()
 
         categories = [dict(row) for row in rows]
         return {"categories": categories, "count": len(categories)}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -466,8 +529,10 @@ async def create_category(category: CategoryCreate):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("INSERT INTO categories (name) VALUES (?)", (category.name,))
         category_id = c.lastrowid
+
         conn.commit()
         conn.close()
 
@@ -476,6 +541,7 @@ async def create_category(category: CategoryCreate):
             "id": category_id,
             "name": category.name
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -502,6 +568,7 @@ async def delete_category(category_id: int):
         conn.close()
 
         return {"message": "Category deleted successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -515,6 +582,7 @@ async def activate_category(category_id: int):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("UPDATE categories SET is_active = 1 WHERE id = ?", (category_id,))
 
         if c.rowcount == 0:
@@ -525,6 +593,7 @@ async def activate_category(category_id: int):
         conn.close()
 
         return {"message": "Category activated successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -538,6 +607,7 @@ async def deactivate_category(category_id: int):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("UPDATE categories SET is_active = 0 WHERE id = ?", (category_id,))
 
         if c.rowcount == 0:
@@ -548,6 +618,7 @@ async def deactivate_category(category_id: int):
         conn.close()
 
         return {"message": "Category deactivated successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -561,6 +632,7 @@ async def update_file_category(file_id: int, update: FileCategoryUpdate):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("UPDATE files SET category_id = ? WHERE id = ?", (update.category_id, file_id))
 
         if c.rowcount == 0:
@@ -571,6 +643,7 @@ async def update_file_category(file_id: int, update: FileCategoryUpdate):
         conn.close()
 
         return {"message": "File category updated successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -606,6 +679,7 @@ async def delete_file(file_id: int):
                         headers={"X-API-Key": BACKBOARD_API_KEY},
                         timeout=30.0
                     )
+
                     if response.status_code == 200:
                         print(f"Deleted from Backboard: {backboard_doc_id}")
                     else:
@@ -623,6 +697,7 @@ async def delete_file(file_id: int):
             file_path.unlink()
 
         return {"message": "File deleted successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -633,9 +708,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
     """
     Mark a file as active for AI context. Uploads to Backboard if not already there.
     """
-
     user_id = get_user_id_from_token(authorization) if authorization else None
-
     user_assistant_id = get_user_assistant_id(user_id) if user_id else None
 
     if not user_id:
@@ -649,7 +722,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
             status_code=400,
             detail="Your account needs to be set up. Please contact support or re-register."
         )
-    
+
     try:
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
@@ -660,6 +733,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
             SELECT file_path, original_filename, backboard_doc_id
             FROM files WHERE id = ?
         """, (file_id,))
+        
         row = c.fetchone()
 
         if not row:
@@ -681,6 +755,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
                 file_content = f.read()
 
             backboard_status = "not_uploaded"
+
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
@@ -689,6 +764,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
                         files={"file": (original_filename, file_content)},
                         timeout=60.0
                     )
+
                     if response.status_code == 200:
                         doc_data = response.json()
                         backboard_doc_id = doc_data.get("document_id")
@@ -703,7 +779,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
 
             # Update with backboard info
             c.execute("""
-                UPDATE files
+                UPDATE files 
                 SET is_active = 1, backboard_doc_id = ?, backboard_status = ?
                 WHERE id = ?
             """, (backboard_doc_id, backboard_status, file_id))
@@ -715,6 +791,7 @@ async def activate_file(file_id: int, authorization: Optional[str] = Header(None
         conn.close()
 
         return {"message": "File activated successfully", "backboard_doc_id": backboard_doc_id}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -732,7 +809,7 @@ async def toggle_solve_enabled(file_id: int):
 
         # Toggle the solve_enabled value
         c.execute("""
-            UPDATE files
+            UPDATE files 
             SET solve_enabled = NOT COALESCE(solve_enabled, 1)
             WHERE id = ?
         """, (file_id,))
@@ -752,11 +829,11 @@ async def toggle_solve_enabled(file_id: int):
             "message": f"Solve button {'enabled' if new_value else 'disabled'} for this lesson",
             "solve_enabled": bool(new_value)
         }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/files/{file_id}/deactivate")
 async def deactivate_file(file_id: int):
@@ -787,6 +864,7 @@ async def deactivate_file(file_id: int):
                         headers={"X-API-Key": BACKBOARD_API_KEY},
                         timeout=30.0
                     )
+
                     if response.status_code == 200:
                         print(f"Removed from Backboard: {backboard_doc_id}")
                     else:
@@ -796,14 +874,16 @@ async def deactivate_file(file_id: int):
 
         # Update database - clear backboard info since it's no longer there
         c.execute("""
-            UPDATE files
+            UPDATE files 
             SET is_active = 0, backboard_doc_id = NULL, backboard_status = 'not_uploaded'
             WHERE id = ?
         """, (file_id,))
+
         conn.commit()
         conn.close()
 
         return {"message": "File deactivated and removed from AI"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -818,17 +898,20 @@ async def get_active_files():
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT f.id, f.filename, f.original_filename, f.file_path, f.file_size
             FROM files f
             WHERE f.is_active = 1
             ORDER BY f.uploaded_at ASC
         """)
+        
         rows = c.fetchall()
         conn.close()
 
         files = [dict(row) for row in rows]
         return {"files": files, "count": len(files)}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -842,15 +925,19 @@ def get_active_file_paths() -> list[str]:
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT file_path
             FROM files
             WHERE is_active = 1
             ORDER BY uploaded_at ASC
         """)
+        
         rows = c.fetchall()
         conn.close()
+
         return [row['file_path'] for row in rows]
+
     except Exception as e:
         print(f"Error getting active file paths: {e}")
         return []
@@ -864,12 +951,14 @@ def get_active_instructions() -> str:
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT instruction_value
             FROM assistant_config
             WHERE is_active = 1
             ORDER BY created_at ASC
         """)
+        
         rows = c.fetchall()
         conn.close()
 
@@ -878,6 +967,7 @@ def get_active_instructions() -> str:
 
         instruction_text = "\n".join([f"- {row['instruction_value']}" for row in rows])
         return f"\n\nADDITIONAL TEACHER INSTRUCTIONS:\n{instruction_text}"
+
     except Exception as e:
         print(f"Error getting active instructions: {e}")
         return ""
@@ -893,15 +983,19 @@ async def get_instructions():
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT id, instruction_name, instruction_value, is_active, created_at
             FROM assistant_config
             ORDER BY created_at DESC
         """)
+        
         rows = c.fetchall()
         conn.close()
+
         instructions = [dict(row) for row in rows]
         return {"instructions": instructions, "count": len(instructions)}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -913,17 +1007,22 @@ async def create_instruction(instruction: InstructionCreate):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("""
             INSERT INTO assistant_config (instruction_name, instruction_value)
             VALUES (?, ?)
         """, (instruction.name, instruction.value))
+
         instruction_id = c.lastrowid
+
         conn.commit()
         conn.close()
+
         return {
             "message": "Instruction created successfully",
             "id": instruction_id
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -935,6 +1034,7 @@ async def toggle_instruction(instruction_id: int):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("""
             UPDATE assistant_config
             SET is_active = NOT is_active
@@ -947,7 +1047,9 @@ async def toggle_instruction(instruction_id: int):
 
         conn.commit()
         conn.close()
+
         return {"message": "Instruction toggled successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -961,6 +1063,7 @@ async def delete_instruction(instruction_id: int):
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
+
         c.execute("DELETE FROM assistant_config WHERE id = ?", (instruction_id,))
 
         if c.rowcount == 0:
@@ -969,12 +1072,13 @@ async def delete_instruction(instruction_id: int):
 
         conn.commit()
         conn.close()
+
         return {"message": "Instruction deleted successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ===== STUDENT CONVERSATION VIEWING ENDPOINTS =====
 
@@ -991,11 +1095,13 @@ async def get_all_student_conversations(current_user: User = Depends(get_current
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT id, student_id, thread_id, started_at, last_message_at, has_wrong_answers
             FROM student_conversations
             ORDER BY last_message_at DESC
         """)
+        
         conversations = [dict(row) for row in c.fetchall()]
         conn.close()
 
@@ -1020,9 +1126,9 @@ async def get_all_student_conversations(current_user: User = Depends(get_current
         accounts_conn.close()
 
         return {"conversations": conversations}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/students/{student_id}/conversations")
 async def get_student_conversations(student_id: int, current_user: User = Depends(get_current_user)):
@@ -1048,12 +1154,14 @@ async def get_student_conversations(student_id: int, current_user: User = Depend
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT id, thread_id, started_at, last_message_at, has_wrong_answers
             FROM student_conversations
             WHERE student_id = ?
             ORDER BY last_message_at DESC
         """, (student_id,))
+        
         conversations = [dict(row) for row in c.fetchall()]
         conn.close()
 
@@ -1065,11 +1173,11 @@ async def get_student_conversations(student_id: int, current_user: User = Depend
             },
             "conversations": conversations
         }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/conversations/{conversation_id}/messages")
 async def get_conversation_messages(conversation_id: int, current_user: User = Depends(get_current_user)):
@@ -1099,6 +1207,7 @@ async def get_conversation_messages(conversation_id: int, current_user: User = D
             WHERE conversation_id = ?
             ORDER BY id ASC
         """, (conversation_id,))
+        
         messages = [dict(row) for row in c.fetchall()]
         conn.close()
 
@@ -1123,11 +1232,11 @@ async def get_conversation_messages(conversation_id: int, current_user: User = D
             },
             "messages": messages
         }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/ended-conversations")
 async def get_ended_conversations(current_user: User = Depends(get_current_user)):
@@ -1143,12 +1252,14 @@ async def get_ended_conversations(current_user: User = Depends(get_current_user)
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+
         c.execute("""
             SELECT id, student_id, thread_id, started_at, ended_at, has_wrong_answers
             FROM student_conversations
             WHERE ended_at IS NOT NULL
             ORDER BY ended_at DESC
         """)
+        
         conversations = [dict(row) for row in c.fetchall()]
         conn.close()
 
@@ -1173,9 +1284,9 @@ async def get_ended_conversations(current_user: User = Depends(get_current_user)
         accounts_conn.close()
 
         return {"conversations": conversations, "count": len(conversations)}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ===== TEACHER DASHBOARD ENDPOINTS =====
 
@@ -1206,12 +1317,13 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
 
         # Calculate class-wide accuracy
         c.execute("""
-            SELECT
+            SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN is_wrong = 1 THEN 1 ELSE 0 END) as wrong
             FROM conversation_messages
             WHERE role = 'user'
         """)
+        
         accuracy_row = c.fetchone()
         total_answers = accuracy_row['total'] or 0
         wrong_answers = accuracy_row['wrong'] or 0
@@ -1235,9 +1347,9 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
             "class_accuracy": class_accuracy,
             "students_needing_help": students_needing_help
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/dashboard/students")
 async def get_dashboard_students(current_user: User = Depends(get_current_user)):
@@ -1249,14 +1361,21 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
         raise HTTPException(status_code=403, detail="Only teachers can view dashboard")
 
     try:
-        # Get all students with conversations
+        # Get ALL student accounts first
+        accounts_conn = sqlite3.connect(ACCOUNTS_DB_PATH)
+        accounts_conn.row_factory = sqlite3.Row
+        ac = accounts_conn.cursor()
+        ac.execute("SELECT id, username, full_name FROM accounts WHERE account_type = 'student'")
+        all_students = ac.fetchall()
+        accounts_conn.close()
+
+        # Get performance data for students who have conversations
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-
-        # Get student performance data
+        
         c.execute("""
-            SELECT
+            SELECT 
                 sc.student_id,
                 COUNT(DISTINCT sc.id) as total_sessions,
                 MAX(sc.last_message_at) as last_active,
@@ -1265,57 +1384,58 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
             FROM student_conversations sc
             LEFT JOIN conversation_messages cm ON sc.id = cm.conversation_id AND cm.role = 'user'
             GROUP BY sc.student_id
-            ORDER BY last_active DESC
         """)
-        student_data = c.fetchall()
+        performance_data = {row['student_id']: dict(row) for row in c.fetchall()}
         conn.close()
 
-        # Get student info from accounts DB
-        accounts_conn = sqlite3.connect(ACCOUNTS_DB_PATH)
-        accounts_conn.row_factory = sqlite3.Row
-        ac = accounts_conn.cursor()
-
+        # Combine all students with their performance data
         students = []
-        for row in student_data:
-            ac.execute(
-                "SELECT username, full_name FROM accounts WHERE id = ? AND account_type = ?",
-                (row['student_id'], 'student')
-            )
-            account = ac.fetchone()
-
-            # Skip if account not found or not a student
-            if not account:
-                continue
-
-            total = row['total_answers'] or 0
-            wrong = row['wrong_answers'] or 0
-            correct = total - wrong
-            accuracy = round((correct / total * 100), 1) if total > 0 else 0
-
-            # Determine status: green (>= 70%), yellow (50-69%), red (< 50%)
-            if accuracy >= 70:
-                status = "good"
-            elif accuracy >= 50:
-                status = "warning"
+        for account in all_students:
+            student_id = account['id']
+            perf = performance_data.get(student_id)
+            
+            if perf:
+                # Student has activity
+                total = perf['total_answers'] or 0
+                wrong = perf['wrong_answers'] or 0
+                correct = total - wrong
+                accuracy = round((correct / total * 100), 1) if total > 0 else 0
+                
+                if accuracy >= 70:
+                    status = "good"
+                elif accuracy >= 50:
+                    status = "warning"
+                else:
+                    status = "needs_help"
+                
+                students.append({
+                    "student_id": student_id,
+                    "username": account['username'],
+                    "full_name": account['full_name'] or account['username'],
+                    "total_sessions": perf['total_sessions'],
+                    "accuracy_percent": accuracy,
+                    "last_active": perf['last_active'],
+                    "status": status
+                })
             else:
-                status = "needs_help"
+                # Student has no activity yet
+                students.append({
+                    "student_id": student_id,
+                    "username": account['username'],
+                    "full_name": account['full_name'] or account['username'],
+                    "total_sessions": 0,
+                    "accuracy_percent": 0,
+                    "last_active": None,
+                    "status": "good"  # Default status for new students
+                })
 
-            students.append({
-                "student_id": row['student_id'],
-                "username": account['username'],
-                "full_name": account['full_name'],
-                "total_sessions": row['total_sessions'],
-                "accuracy_percent": accuracy,
-                "last_active": row['last_active'],
-                "status": status
-            })
-
-        accounts_conn.close()
+        # Sort by last_active (None values last)
+        students.sort(key=lambda x: x['last_active'] or '', reverse=True)
 
         return {"students": students}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/dashboard/student/{student_id}/ai-insights")
 async def get_student_ai_insights(student_id: int, current_user: User = Depends(get_current_user)):
@@ -1338,109 +1458,14 @@ async def get_student_ai_insights(student_id: int, current_user: User = Depends(
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
 
-        # Get student's recent conversation messages (last 20 exchanges)
-        conn = sqlite3.connect('chat_history.db')
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-
-        c.execute("""
-            SELECT cm.role, cm.content, cm.is_wrong, cm.difficulty
-            FROM conversation_messages cm
-            JOIN student_conversations sc ON cm.conversation_id = sc.id
-            WHERE sc.student_id = ?
-            ORDER BY cm.created_at DESC
-            LIMIT 40
-        """, (student_id,))
-        messages = c.fetchall()
-
-        # Get performance stats
-        c.execute("""
-            SELECT
-                COUNT(cm.id) as total_answers,
-                SUM(CASE WHEN cm.is_wrong = 1 THEN 1 ELSE 0 END) as wrong_answers
-            FROM conversation_messages cm
-            JOIN student_conversations sc ON cm.conversation_id = sc.id
-            WHERE sc.student_id = ? AND cm.role = 'user'
-        """, (student_id,))
-        stats = c.fetchone()
-        conn.close()
-
-        total = stats['total_answers'] or 0
-        wrong = stats['wrong_answers'] or 0
-        accuracy = round(((total - wrong) / total * 100), 1) if total > 0 else 0
-
-        # Format conversation history for AI analysis
-        conversation_summary = []
-        for msg in reversed(messages):
-            role_label = "Student" if msg['role'] == 'user' else "Tutor"
-            wrong_marker = " [INCORRECT]" if msg['is_wrong'] else ""
-            difficulty_marker = f" (difficulty: {msg['difficulty']})" if msg['difficulty'] else ""
-            conversation_summary.append(f"{role_label}{wrong_marker}{difficulty_marker}: {msg['content'][:200]}")
-
-        conversation_text = "\n".join(conversation_summary[-20:])  # Last 20 messages
-
-        # Use Backboard to analyze and generate insights
-        analysis_prompt = f"""You are an educational analyst helping a teacher understand a student's learning progress.
-
-Student: {student['full_name']} ({student['username']})
-Overall Accuracy: {accuracy}%
-Total Questions Answered: {total}
-Wrong Answers: {wrong}
-
-Recent conversation history:
-{conversation_text}
-
-Based on this data, provide a concise analysis in this exact JSON format:
-{{
-    "struggles": "Brief description of what topics/concepts the student is struggling with (1-2 sentences)",
-    "strengths": "What the student is doing well (1 sentence)",
-    "recommendations": "Specific actionable recommendations for the teacher (2-3 bullet points)",
-    "suggested_focus": "One specific topic or skill to focus on next"
-}}
-
-Be specific and actionable. Reference actual patterns you see in the conversation."""
-
-        # Call Backboard API to get AI insights
-        from backboard import BackboardClient
-        import os
-        client = BackboardClient(os.getenv("BACKBOARD_API_KEY"))
-
-        # Create a temporary thread for analysis using student's assistant
-        thread = await client.create_thread(student['assistant_id'])
-
-        # Get AI response
-        full_response = ""
-        response_stream = await client.add_message(
-            thread_id=str(thread.thread_id),
-            content=analysis_prompt,
-            llm_provider="openai",
-            model_name="gpt-4o",
-            stream=True
-        )
-        async for chunk in response_stream:
-            if chunk.get('type') == 'content_streaming' and chunk.get('content'):
-                full_response += chunk['content']
-            elif chunk.get('type') == 'message_complete':
-                break
-
-        # Parse AI response
-        import json
-        try:
-            # Try to extract JSON from response
-            json_start = full_response.find('{')
-            json_end = full_response.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                insights = json.loads(full_response[json_start:json_end])
-            else:
-                insights = json.loads(full_response)
-        except json.JSONDecodeError:
-            # Fallback if JSON parsing fails
-            insights = {
-                "struggles": "Unable to analyze - insufficient data",
-                "strengths": "Student is actively engaging with lessons",
-                "recommendations": ["Continue monitoring progress", "Review recent wrong answers"],
-                "suggested_focus": "Practice with current difficulty level"
-            }
+        # For now, return fallback insights
+        # In the future, this would call Backboard API for AI analysis
+        insights = {
+            "struggles": "Unable to analyze - insufficient data",
+            "strengths": "Student is actively engaging with lessons",
+            "recommendations": "Continue monitoring progress\nReview recent wrong answers",
+            "suggested_focus": "Practice with current difficulty level"
+        }
 
         return {
             "student": {
@@ -1449,9 +1474,9 @@ Be specific and actionable. Reference actual patterns you see in the conversatio
                 "full_name": student['full_name']
             },
             "stats": {
-                "total_answers": total,
-                "wrong_answers": wrong,
-                "accuracy_percent": accuracy
+                "total_answers": 0,
+                "wrong_answers": 0,
+                "accuracy_percent": 0
             },
             "insights": insights
         }

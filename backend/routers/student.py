@@ -410,6 +410,93 @@ async def auto_sync_lessons_to_student(student_id: int, student_assistant_id: st
     except Exception as e:
         print(f"Error in auto_sync_lessons_to_student: {e}")
 
+@router.get("/available-lessons")
+async def get_available_lessons(authorization: Optional[str] = Header(None)):
+    """
+    Get all active lessons available to students.
+    """
+    user_id = get_user_id_from_token(authorization) if authorization else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please log in!")
+
+    try:
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        # FIX: Include 'pending' status so new uploads appear immediately
+        # They'll just show as "Processing" until indexed
+        c.execute("""
+            SELECT 
+                f.id,
+                f.original_filename as name,
+                COALESCE(c.name, 'Uncategorized') as category,
+                f.uploaded_at,
+                f.backboard_status,
+                COALESCE(sl.id, 0) as has_started,
+                sl.started_at
+            FROM files f
+            LEFT JOIN categories c ON f.category_id = c.id
+            LEFT JOIN student_lessons sl ON f.id = sl.file_id AND sl.student_id = ?
+            WHERE f.is_active = 1 
+            AND f.backboard_status IN ('indexed', 'processed', 'pending', 'retrying')
+            ORDER BY f.uploaded_at DESC
+        """, (user_id,))
+
+        rows = c.fetchall()
+        conn.close()
+
+        lessons = [{
+            "id": row["id"],
+            "name": row["name"],
+            "category": row["category"],
+            "uploaded_at": row["uploaded_at"],
+            "backboard_status": row["backboard_status"],
+            "started": bool(row["has_started"]),
+            "started_at": row["started_at"]
+        } for row in rows]
+
+        return {"lessons": lessons, "count": len(lessons)}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/start-lesson/{file_id}")
+async def start_lesson(file_id: int, authorization: Optional[str] = Header(None)):
+    """Mark a lesson as started for the student."""
+    user_id = get_user_id_from_token(authorization) if authorization else None
+    
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please log in!")
+    
+    try:
+        conn = sqlite3.connect('chat_history.db')
+        c = conn.cursor()
+        
+        # Verify file exists
+        c.execute("SELECT id FROM files WHERE id = ? AND is_active = 1", (file_id,))
+        if not c.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Lesson not found")
+        
+        # Check if already started
+        c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (user_id, file_id))
+        if c.fetchone():
+            conn.close()
+            return {"message": "Lesson already started", "file_id": file_id}
+        
+        # Create record
+        c.execute("INSERT INTO student_lessons (student_id, file_id) VALUES (?, ?)", (user_id, file_id))
+        conn.commit()
+        conn.close()
+        
+        return {"message": "Lesson started successfully", "file_id": file_id}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/chat")
 async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)):
     # Get user_id from token (works for both students and teachers)
@@ -785,54 +872,6 @@ async def get_my_conversations(current_user: User = Depends(get_current_user)):
 
 # ===== LESSON MANAGEMENT ENDPOINTS =====
 
-@router.get("/available-lessons")
-async def get_available_lessons(current_user: User = Depends(get_current_user)):
-    """Get all lessons available to the student (active files from teacher)."""
-    if current_user.account_type != "student":
-        raise HTTPException(status_code=403, detail="Only students can view lessons")
-
-    # Get student_id
-    conn = sqlite3.connect(ACCOUNTS_DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id FROM accounts WHERE username = ?", (current_user.username,))
-    row = c.fetchone()
-    student_id = row[0] if row else None
-    conn.close()
-
-    if not student_id:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    # Get all active files (available lessons)
-    conn = sqlite3.connect('chat_history.db')
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("""
-        SELECT f.id, f.original_filename, f.uploaded_at, f.backboard_status,
-               c.name as category_name,
-               sl.id as lesson_id, sl.started_at as lesson_started_at
-        FROM files f
-        LEFT JOIN categories c ON f.category_id = c.id
-        LEFT JOIN student_lessons sl ON f.id = sl.file_id AND sl.student_id = ?
-        WHERE f.is_active = 1 AND f.backboard_status = 'indexed'
-        ORDER BY f.uploaded_at DESC
-    """, (student_id,))
-    files = c.fetchall()
-    conn.close()
-
-    lessons = []
-    for f in files:
-        lessons.append({
-            "id": f["id"],
-            "name": f["original_filename"],
-            "category": f["category_name"],
-            "uploaded_at": f["uploaded_at"],
-            "started": f["lesson_id"] is not None,
-            "started_at": f["lesson_started_at"]
-        })
-
-    return {"lessons": lessons}
-
-
 @router.get("/my-lessons")
 async def get_my_lessons(current_user: User = Depends(get_current_user)):
     """Get lessons the student has already started."""
@@ -867,103 +906,6 @@ async def get_my_lessons(current_user: User = Depends(get_current_user)):
     conn.close()
 
     return {"lessons": lessons}
-
-
-@router.post("/start-lesson/{file_id}")
-async def start_lesson(file_id: int, current_user: User = Depends(get_current_user)):
-    """Start a lesson - syncs the document to the student's assistant."""
-    if current_user.account_type != "student":
-        raise HTTPException(status_code=403, detail="Only students can start lessons")
-
-    # Get student info
-    conn = sqlite3.connect(ACCOUNTS_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT id, assistant_id FROM accounts WHERE username = ?", (current_user.username,))
-    row = c.fetchone()
-    conn.close()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    student_id = row["id"]
-    student_assistant_id = row["assistant_id"]
-
-    if not student_assistant_id:
-        raise HTTPException(status_code=400, detail="Student doesn't have an assistant. Please re-login.")
-
-    # Get file info
-    conn = sqlite3.connect('chat_history.db')
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("""
-        SELECT id, file_path, original_filename, backboard_status
-        FROM files WHERE id = ? AND is_active = 1
-    """, (file_id,))
-    file_row = c.fetchone()
-
-    if not file_row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Lesson not found or not available")
-
-    # Check if already started
-    c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (student_id, file_id))
-    existing = c.fetchone()
-
-    if existing:
-        # Already started, just update last_accessed
-        c.execute("UPDATE student_lessons SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?", (existing["id"],))
-        conn.commit()
-        conn.close()
-        return {"message": "Lesson already started", "lesson_id": existing["id"]}
-
-    # Upload document to student's assistant
-    file_path = Path(file_row["file_path"])
-    if not file_path.exists():
-        conn.close()
-        raise HTTPException(status_code=404, detail="Lesson file not found on server")
-
-    # Read file content
-    with open(file_path, "rb") as f:
-        file_content = f.read()
-
-    # Upload to student's assistant
-    backboard_doc_id = None
-    try:
-        async with httpx.AsyncClient() as http_client:
-            response = await http_client.post(
-                f"{BACKBOARD_BASE_URL}/assistants/{student_assistant_id}/documents",
-                headers={"X-API-Key": BACKBOARD_API_KEY},
-                files={"file": (file_row["original_filename"], file_content)},
-                timeout=60.0
-            )
-            if response.status_code == 200:
-                doc_data = response.json()
-                backboard_doc_id = doc_data.get("document_id")
-                print(f"Uploaded lesson to student {student_id}'s assistant: {backboard_doc_id}")
-            else:
-                print(f"Failed to upload lesson: {response.status_code} - {response.text}")
-                conn.close()
-                raise HTTPException(status_code=500, detail="Failed to sync lesson to your learning assistant")
-    except httpx.RequestError as e:
-        conn.close()
-        raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
-
-    # Record the started lesson
-    c.execute("""
-        INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
-        VALUES (?, ?, ?)
-    """, (student_id, file_id, backboard_doc_id))
-    lesson_id = c.lastrowid
-    conn.commit()
-    conn.close()
-
-    return {
-        "message": "Lesson started successfully!",
-        "lesson_id": lesson_id,
-        "backboard_doc_id": backboard_doc_id
-    }
-
 
 @router.get("/conversations/lesson/{file_id}")
 async def get_conversation_for_lesson(file_id: int, current_user: User = Depends(get_current_user)):

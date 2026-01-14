@@ -141,13 +141,14 @@ def init_db():
 
     # Student lessons table - tracks which lessons each student has started
     c.execute('''CREATE TABLE IF NOT EXISTS student_lessons
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  student_id INTEGER NOT NULL,
-                  file_id INTEGER NOT NULL,
-                  backboard_doc_id TEXT,
-                  started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(student_id, file_id))''')
+                (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(student_id, file_id),
+                FOREIGN KEY(student_id) REFERENCES users(id),
+                FOREIGN KEY(file_id) REFERENCES files(id))''')
 
     conn.commit()
     conn.close()

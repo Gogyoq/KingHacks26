@@ -1,14 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { BarChart3, FileText, Settings, Users, Calendar, TrendingUp, AlertCircle, Upload, FolderPlus, Tag, Trash2, Eye, EyeOff, CheckCircle, Clock, XCircle, AlertTriangle, FolderOpen, Plus, X, ToggleLeft, ToggleRight } from 'lucide-react';
 
-interface Category {
-  id: number;
-  name: string;
-  created_at: string;
-  is_active: boolean;
-}
-
-interface FileItem {
+// Interfaces
+interface File {
   id: number;
   filename: string;
   original_filename: string;
@@ -18,8 +12,15 @@ interface FileItem {
   category_id: number | null;
   category_name: string | null;
   backboard_doc_id: string | null;
-  backboard_status: string | null;
-  solve_enabled: boolean | null;
+  backboard_status: string;
+  solve_enabled: boolean;
+}
+
+interface Category {
+  id: number;
+  name: string;
+  is_active: boolean;
+  created_at: string;
 }
 
 interface Instruction {
@@ -30,45 +31,6 @@ interface Instruction {
   created_at: string;
 }
 
-interface Student {
-  id?: number;
-  username: string;
-  full_name: string;
-  email: string;
-  account_active: number;
-}
-
-interface Conversation {
-  id: number;
-  student_id: number;
-  student_username?: string;
-  student_name?: string;
-  thread_id: string;
-  started_at: string;
-  last_message_at: string;
-  has_wrong_answers: boolean | number;
-}
-
-interface EndedConversation {
-  id: number;
-  student_id: number;
-  student_username?: string;
-  student_name?: string;
-  thread_id: string;
-  started_at: string;
-  ended_at: string;
-  has_wrong_answers: boolean | number;
-}
-
-interface ConversationMessage {
-  id: number;
-  role: 'user' | 'bot';
-  content: string;
-  is_wrong: boolean | number;
-  created_at: string;
-}
-
-// Dashboard interfaces
 interface DashboardStats {
   active_students: number;
   sessions_today: number;
@@ -76,7 +38,7 @@ interface DashboardStats {
   students_needing_help: number;
 }
 
-interface DashboardStudent {
+interface Student {
   student_id: number;
   username: string;
   full_name: string;
@@ -86,1228 +48,573 @@ interface DashboardStudent {
   status: 'good' | 'warning' | 'needs_help';
 }
 
-interface AIInsights {
-  student: {
-    id: number;
-    username: string;
-    full_name: string;
-  };
-  stats: {
-    total_answers: number;
-    wrong_answers: number;
-    accuracy_percent: number;
-  };
-  insights: {
-    struggles: string;
-    strengths: string;
-    recommendations: string | string[];
-    suggested_focus: string;
-  };
-}
-
 const Teacher: React.FC = () => {
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [loading, setLoading] = useState(false);
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'files' | 'config'>('dashboard');
 
-  // Configuration tab state
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'files' | 'config' | 'students'>('dashboard');
-  const [instructions, setInstructions] = useState<Instruction[]>([]);
-  const [newInstruction, setNewInstruction] = useState({ name: '', value: '' });
-
-  // Dashboard tab state
-  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
-  const [dashboardStudents, setDashboardStudents] = useState<DashboardStudent[]>([]);
-  const [dashboardLoading, setDashboardLoading] = useState(false);
-  const [aiInsights, setAiInsights] = useState<AIInsights | null>(null);
-  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
-  const [selectedStudentForInsights, setSelectedStudentForInsights] = useState<number | null>(null);
-
-  // Students tab state
+  // Dashboard state
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [studentsLoading, setStudentsLoading] = useState(false);
-  const [studentsError, setStudentsError] = useState<string | null>(null);
 
+  // Files state
+  const [files, setFiles] = useState<File[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
+  const [fileStatusPolling, setFileStatusPolling] = useState<Set<number>>(new Set());
 
-  // Conversations state
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [conversationsLoading, setConversationsLoading] = useState(false);
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
-  const [conversationMessages, setConversationMessages] = useState<ConversationMessage[]>([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [selectedStudentFilter, setSelectedStudentFilter] = useState<number | null>(null);
+  // Config state
+  const [instructions, setInstructions] = useState<Instruction[]>([]);
+  const [instructionsLoading, setInstructionsLoading] = useState(false);
+  const [newInstructionName, setNewInstructionName] = useState('');
+  const [newInstructionValue, setNewInstructionValue] = useState('');
 
-  // Accordion state (Saurav's UX pattern)
-  const [expandedStudents, setExpandedStudents] = useState<Set<number>>(new Set());
-  const [expandedConversations, setExpandedConversations] = useState<Set<number>>(new Set());
-
-  // Ended conversations state (for Student Chat Sessions)
-  const [endedConversations, setEndedConversations] = useState<EndedConversation[]>([]);
-  const [endedConversationsLoading, setEndedConversationsLoading] = useState(false);
-  const [expandedEndedSessions, setExpandedEndedSessions] = useState<Set<number>>(new Set());
-  const [selectedEndedThreadId, setSelectedEndedThreadId] = useState<string | null>(null);
-  const [endedChatHistory, setEndedChatHistory] = useState<ConversationMessage[]>([]);
-
-  useEffect(() => {
-    fetchCategories();
-    fetchFiles();
-  }, []);
-
-  // Poll for status updates on pending files
-  useEffect(() => {
-    const pendingFiles = files.filter(f => f.backboard_status === 'pending' || f.backboard_status === 'processing');
-    if (pendingFiles.length === 0) return;
-
-    const pollInterval = setInterval(async () => {
-      // Refresh file status for pending files
-      for (const file of pendingFiles) {
-        try {
-          const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-          const response = await axios.get(
-            `http://localhost:8000/teacher/files/${file.id}/backboard-status`,
-            {
-              headers: {
-                ...(token && { 'Authorization': `Bearer ${token}` }),
-              },
-            }
-          );
-          if (response.data.status !== file.backboard_status) {
-            // Status changed, refresh all files
-            await fetchFiles();
-            break;
-          }
-        } catch (err) {
-          console.error(`Failed to check status for file ${file.id}`, err);
-        }
-      }
-    }, 5000); // Poll every 5 seconds
-
-    return () => clearInterval(pollInterval);
-  }, [files]);
-
+  // Fetch data on mount and tab change
   useEffect(() => {
     if (activeTab === 'dashboard') {
-      fetchDashboardData();
-    }
-    if (activeTab === 'config') {
-      fetchInstructions();
-    }
-    if (activeTab === 'students') {
+      fetchDashboardStats();
       fetchStudents();
-      fetchConversations();
-      fetchEndedConversations();
+    } else if (activeTab === 'files') {
+      fetchFiles();
+      fetchCategories();
+    } else if (activeTab === 'config') {
+      fetchInstructions();
     }
   }, [activeTab]);
 
-  const fetchDashboardData = async () => {
-    setDashboardLoading(true);
-    try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const [statsRes, studentsRes] = await Promise.all([
-        axios.get('http://localhost:8000/teacher/dashboard/stats', {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        axios.get('http://localhost:8000/teacher/dashboard/students', {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-      ]);
-
-      setDashboardStats(statsRes.data);
-      setDashboardStudents(studentsRes.data.students);
-    } catch (err: any) {
-      console.error("Failed to fetch dashboard data", err);
-    } finally {
-      setDashboardLoading(false);
-    }
-  };
-
-  const fetchAIInsights = async (studentId: number) => {
-    setAiInsightsLoading(true);
-    setSelectedStudentForInsights(studentId);
-    setAiInsights(null);
-    try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get(`http://localhost:8000/teacher/dashboard/student/${studentId}/ai-insights`, {
-        headers: { Authorization: `Bearer ${token}` }
+  // Poll file statuses for pending uploads
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fileStatusPolling.forEach(fileId => {
+        checkFileStatus(fileId);
       });
+    }, 5000);
 
-      setAiInsights(response.data);
-    } catch (err: any) {
-      console.error("Failed to fetch AI insights", err);
-      alert('Failed to get AI insights: ' + (err.response?.data?.detail || err.message));
+    return () => clearInterval(interval);
+  }, [fileStatusPolling]);
+
+  // API calls
+  const getToken = () => localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+
+  const fetchDashboardStats = async () => {
+    setStatsLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/teacher/dashboard/stats', {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setStats(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch stats:', error);
     } finally {
-      setAiInsightsLoading(false);
+      setStatsLoading(false);
     }
   };
 
   const fetchStudents = async () => {
     setStudentsLoading(true);
-    setStudentsError(null);
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) {
-        setStudentsError('You must be logged in as a teacher to view students');
-        return;
-      }
-      const response = await axios.get('http://localhost:8000/accounts/students', {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch('http://localhost:8000/teacher/dashboard/students', {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
       });
-      setStudents(response.data.students);
-    } catch (err: any) {
-      console.error("Failed to fetch students", err);
-      setStudentsError(err.response?.data?.detail || 'Failed to fetch students');
+      if (response.ok) {
+        const data = await response.json();
+        setStudents(data.students || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch students:', error);
     } finally {
       setStudentsLoading(false);
     }
   };
 
-  const fetchConversations = async () => {
-    setConversationsLoading(true);
+  const fetchFiles = async () => {
+    setFilesLoading(true);
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get('http://localhost:8000/teacher/students/conversations', {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch('http://localhost:8000/teacher/files', {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
       });
-      setConversations(response.data.conversations);
-    } catch (err: any) {
-      console.error("Failed to fetch conversations", err);
+      if (response.ok) {
+        const data = await response.json();
+        setFiles(data.files || []);
+        
+        const pending = data.files.filter((f: File) => 
+          f.backboard_status === 'pending' || f.backboard_status === 'retrying'
+        ).map((f: File) => f.id);
+        setFileStatusPolling(new Set(pending));
+      }
+    } catch (error) {
+      console.error('Failed to fetch files:', error);
     } finally {
-      setConversationsLoading(false);
-    }
-  };
-
-  const fetchConversationMessages = async (conversationId: number) => {
-    setMessagesLoading(true);
-    try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get(`http://localhost:8000/teacher/conversations/${conversationId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setConversationMessages(response.data.messages);
-      setSelectedConversation(response.data.conversation);
-    } catch (err: any) {
-      console.error("Failed to fetch conversation messages", err);
-    } finally {
-      setMessagesLoading(false);
-    }
-  };
-
-  const fetchEndedConversations = async () => {
-    setEndedConversationsLoading(true);
-    try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get('http://localhost:8000/teacher/ended-conversations', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setEndedConversations(response.data.conversations || []);
-    } catch (err: any) {
-      console.error("Failed to fetch ended conversations", err);
-    } finally {
-      setEndedConversationsLoading(false);
-    }
-  };
-
-  const fetchEndedChatHistory = async (conversationId: number) => {
-    try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get(`http://localhost:8000/teacher/conversations/${conversationId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      // Filter to show only user messages (student messages)
-      const userMessages = response.data.messages.filter((msg: ConversationMessage) => msg.role === 'user');
-      setEndedChatHistory(userMessages);
-    } catch (err: any) {
-      console.error("Failed to fetch ended chat history", err);
-      setEndedChatHistory([]);
-    }
-  };
-
-  const toggleEndedSession = async (conversationId: number, threadId: string) => {
-    const newExpanded = new Set(expandedEndedSessions);
-    if (newExpanded.has(conversationId)) {
-      newExpanded.delete(conversationId);
-      if (selectedEndedThreadId === threadId) {
-        setSelectedEndedThreadId(null);
-        setEndedChatHistory([]);
-      }
-    } else {
-      newExpanded.add(conversationId);
-      setSelectedEndedThreadId(threadId);
-      await fetchEndedChatHistory(conversationId);
-    }
-    setExpandedEndedSessions(newExpanded);
-  };
-
-  const getFilteredConversations = () => {
-    if (selectedStudentFilter === null) {
-      return conversations;
-    }
-    return conversations.filter(c => c.student_id === selectedStudentFilter);
-  };
-
-  // Group conversations by student (Saurav's pattern)
-  const getConversationsGroupedByStudent = () => {
-    const grouped: Record<number, { student: { id: number; name: string }; conversations: Conversation[] }> = {};
-
-    conversations.forEach(conv => {
-      if (!grouped[conv.student_id]) {
-        grouped[conv.student_id] = {
-          student: {
-            id: conv.student_id,
-            name: conv.student_name || conv.student_username || `Student ${conv.student_id}`
-          },
-          conversations: []
-        };
-      }
-      grouped[conv.student_id].conversations.push(conv);
-    });
-
-    return Object.values(grouped);
-  };
-
-  // Toggle student accordion
-  const toggleStudentExpanded = (studentId: number) => {
-    setExpandedStudents(prev => {
-      const next = new Set(prev);
-      if (next.has(studentId)) {
-        next.delete(studentId);
-      } else {
-        next.add(studentId);
-      }
-      return next;
-    });
-  };
-
-  // Toggle conversation expanded and fetch messages
-  const toggleConversationExpanded = async (conv: Conversation) => {
-    const isExpanded = expandedConversations.has(conv.id);
-
-    setExpandedConversations(prev => {
-      const next = new Set(prev);
-      if (isExpanded) {
-        next.delete(conv.id);
-      } else {
-        next.add(conv.id);
-      }
-      return next;
-    });
-
-    // Fetch messages when expanding
-    if (!isExpanded) {
-      await fetchConversationMessages(conv.id);
+      setFilesLoading(false);
     }
   };
 
   const fetchCategories = async () => {
+    setCategoriesLoading(true);
     try {
-      const response = await axios.get('http://localhost:8000/teacher/categories');
-      setCategories(response.data.categories);
-    } catch (err) {
-      console.error("Failed to fetch categories", err);
-    }
-  };
-
-  const fetchFiles = async () => {
-    try {
-      const response = await axios.get('http://localhost:8000/teacher/files');
-      setFiles(response.data.files);
-    } catch (err) {
-      console.error("Failed to fetch files", err);
+      const response = await fetch('http://localhost:8000/teacher/categories', {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(data.categories || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch categories:', error);
+    } finally {
+      setCategoriesLoading(false);
     }
   };
 
   const fetchInstructions = async () => {
+    setInstructionsLoading(true);
     try {
-      const response = await axios.get('http://localhost:8000/teacher/config/instructions');
-      setInstructions(response.data.instructions);
-    } catch (err) {
-      console.error("Failed to fetch instructions", err);
-    }
-  };
-
-  const handleAddInstruction = async () => {
-    if (!newInstruction.name.trim() || !newInstruction.value.trim()) {
-      alert('Please provide both name and instruction text');
-      return;
-    }
-
-    try {
-      await axios.post('http://localhost:8000/teacher/config/instructions', {
-        name: newInstruction.name,
-        value: newInstruction.value
+      const response = await fetch('http://localhost:8000/teacher/config/instructions', {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
       });
-      setNewInstruction({ name: '', value: '' });
-      await fetchInstructions();
-    } catch (err: any) {
-      console.error("Failed to add instruction", err);
-      alert(`Failed to add instruction: ${err.response?.data?.detail || err.message}`);
+      if (response.ok) {
+        const data = await response.json();
+        setInstructions(data.instructions || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch instructions:', error);
+    } finally {
+      setInstructionsLoading(false);
     }
   };
 
-  const handleToggleInstruction = async (instructionId: number) => {
+  const checkFileStatus = async (fileId: number) => {
     try {
-      await axios.post(`http://localhost:8000/teacher/config/instructions/${instructionId}/toggle`);
-      await fetchInstructions();
-    } catch (err: any) {
-      console.error("Failed to toggle instruction", err);
-      alert(`Failed to toggle instruction: ${err.response?.data?.detail || err.message}`);
+      const response = await fetch(`http://localhost:8000/teacher/files/${fileId}/backboard-status`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        
+        setFiles(prev => prev.map(f => 
+          f.id === fileId 
+            ? { ...f, backboard_status: data.status, backboard_doc_id: data.backboard_doc_id } 
+            : f
+        ));
+
+        if (!['pending', 'retrying'].includes(data.status)) {
+          setFileStatusPolling(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(fileId);
+            return newSet;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check file status:', error);
     }
   };
 
-  const handleDeleteInstruction = async (instructionId: number) => {
-    if (!confirm('Are you sure you want to delete this instruction?')) return;
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
 
-    try {
-      await axios.delete(`http://localhost:8000/teacher/config/instructions/${instructionId}`);
-      await fetchInstructions();
-    } catch (err: any) {
-      console.error("Failed to delete instruction", err);
-      alert(`Failed to delete instruction: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  const handleFileUpload = async () => {
-    if (selectedFiles.length === 0) return;
-
+    setUploading(true);
     const formData = new FormData();
-    selectedFiles.forEach((file) => {
-      formData.append("files", file);
+    Array.from(e.target.files).forEach(file => {
+      formData.append('files', file);
     });
 
     try {
-      setUploading(true);
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-
-      await axios.post('http://localhost:8000/teacher/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          ...(token && { 'Authorization': `Bearer ${token}` }),
-        },
+      const response = await fetch('http://localhost:8000/teacher/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+        body: formData
       });
-      setSelectedFiles([]);
-      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Upload failed", err);
-      const errorMsg = err.response?.data?.detail || err.message || 'Upload failed';
-      alert(`Upload failed: ${errorMsg}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(data.message);
+        await fetchFiles();
+        e.target.value = '';
+      } else {
+        const error = await response.json();
+        alert('Upload failed: ' + (error.detail || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      alert('Upload failed: Network error');
     } finally {
       setUploading(false);
     }
-  };
-
-  const handleFileSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (fileList) {
-      setSelectedFiles(Array.from(fileList));
-    }
-  };
-
-  const removeSelectedFile = (index: number) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleCreateCategory = async () => {
     if (!newCategoryName.trim()) return;
 
     try {
-      await axios.post('http://localhost:8000/teacher/categories', { name: newCategoryName });
-      setNewCategoryName('');
-      await fetchCategories();
-    } catch (err: any) {
-      console.error("Failed to create category", err);
-      alert(`Failed to create category: ${err.response?.data?.detail || err.message}`);
-    }
-  };
+      const response = await fetch('http://localhost:8000/teacher/categories', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({ name: newCategoryName })
+      });
 
-  // Helper to render Backboard status badge
-  const renderBackboardStatus = (file: FileItem) => {
-    const status = file.backboard_status;
-
-    if (!status || status === 'not_uploaded') {
-      return <span className="badge badge-ghost badge-sm">Not in AI</span>;
-    }
-
-    switch (status) {
-      case 'pending':
-        return (
-          <span className="badge badge-warning badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Processing
-          </span>
-        );
-      case 'processing':
-        return (
-          <span className="badge badge-info badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Processing
-          </span>
-        );
-      case 'converting':
-      case 'retrying':
-        return (
-          <span className="badge badge-info badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Converting
-          </span>
-        );
-      case 'indexed':
-        return <span className="badge badge-success badge-sm">Ready for AI</span>;
-      case 'error':
-      case 'upload_failed':
-      case 'upload_error':
-        return (
-          <span className="badge badge-warning badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Waiting to retry
-          </span>
-        );
-      case 'conversion_failed':
-        return <span className="badge badge-error badge-sm">Failed</span>;
-      default:
-        return <span className="badge badge-ghost badge-sm">{status}</span>;
+      if (response.ok) {
+        setNewCategoryName('');
+        await fetchCategories();
+      } else {
+        alert('Failed to create category');
+      }
+    } catch (error) {
+      console.error('Error creating category:', error);
     }
   };
 
   const handleDeleteCategory = async (categoryId: number) => {
-    if (!confirm('Are you sure you want to delete this category? Files in this category will become uncategorized.')) return;
+    if (!confirm('Delete this category? Files will become uncategorized.')) return;
 
     try {
-      await axios.delete(`http://localhost:8000/teacher/categories/${categoryId}`);
-      await fetchCategories();
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to delete category", err);
-      alert(`Failed to delete category: ${err.response?.data?.detail || err.message}`);
-    }
-  };
+      const response = await fetch(`http://localhost:8000/teacher/categories/${categoryId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
 
-  const handleToggleCategoryActive = async (categoryId: number, isActive: boolean) => {
-    try {
-      const endpoint = isActive ? 'deactivate' : 'activate';
-      await axios.post(`http://localhost:8000/teacher/categories/${categoryId}/${endpoint}`);
-      await fetchCategories();
-    } catch (err: any) {
-      console.error("Failed to toggle category active status", err);
-      alert(`Failed to update category: ${err.response?.data?.detail || err.message}`);
+      if (response.ok) {
+        await fetchCategories();
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error('Error deleting category:', error);
     }
   };
 
   const handleMoveToCategory = async (fileId: number, categoryId: number | null) => {
     try {
-      await axios.put(`http://localhost:8000/teacher/files/${fileId}/category`, {
-        category_id: categoryId
+      const response = await fetch(`http://localhost:8000/teacher/files/${fileId}/category`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({ category_id: categoryId })
       });
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to move file", err);
-      alert(`Failed to move file: ${err.response?.data?.detail || err.message}`);
-    }
-  };
 
-  const handleToggleActive = async (fileId: number, isActive: boolean) => {
-    try {
-      const endpoint = isActive ? 'deactivate' : 'activate';
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-
-      await axios.post(
-        `http://localhost:8000/teacher/files/${fileId}/${endpoint}`,
-        {},
-        {
-          headers: {
-            ...(token && { 'Authorization': `Bearer ${token}` }),
-          },
-        }
-      );
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to toggle file active status", err);
-      alert(`Failed to update file: ${err.response?.data?.detail || err.message}`);
+      if (response.ok) {
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error('Error moving file:', error);
     }
   };
 
   const handleDeleteFile = async (fileId: number) => {
-    if (!confirm('Are you sure you want to delete this file?')) return;
+    if (!confirm('Delete this file permanently?')) return;
 
     try {
-      await axios.delete(`http://localhost:8000/teacher/files/${fileId}`);
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to delete file", err);
-      alert(`Failed to delete file: ${err.response?.data?.detail || err.message}`);
+      const response = await fetch(`http://localhost:8000/teacher/files/${fileId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+
+      if (response.ok) {
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error('Error deleting file:', error);
+    }
+  };
+
+  const handleToggleActive = async (fileId: number, isActive: boolean) => {
+    const endpoint = isActive 
+      ? `http://localhost:8000/teacher/files/${fileId}/deactivate`
+      : `http://localhost:8000/teacher/files/${fileId}/activate`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+
+      if (response.ok) {
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error('Error toggling file active:', error);
     }
   };
 
   const handleToggleSolve = async (fileId: number) => {
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      await axios.post(
-        `http://localhost:8000/teacher/files/${fileId}/toggle-solve`,
-        {},
-        {
-          headers: {
-            ...(token && { 'Authorization': `Bearer ${token}` }),
-          },
-        }
-      );
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to toggle solve", err);
-      alert(`Failed to toggle solve: ${err.response?.data?.detail || err.message}`);
+      const response = await fetch(`http://localhost:8000/teacher/files/${fileId}/toggle-solve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+
+      if (response.ok) {
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error('Error toggling solve:', error);
     }
   };
 
+  const handleCreateInstruction = async () => {
+    if (!newInstructionName.trim() || !newInstructionValue.trim()) return;
 
-  const getFilesForCategory = (categoryId: number | null) => {
+    try {
+      const response = await fetch('http://localhost:8000/teacher/config/instructions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({
+          name: newInstructionName,
+          value: newInstructionValue
+        })
+      });
+
+      if (response.ok) {
+        setNewInstructionName('');
+        setNewInstructionValue('');
+        await fetchInstructions();
+      }
+    } catch (error) {
+      console.error('Error creating instruction:', error);
+    }
+  };
+
+  const handleToggleInstruction = async (instructionId: number) => {
+    try {
+      const response = await fetch(`http://localhost:8000/teacher/config/instructions/${instructionId}/toggle`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+
+      if (response.ok) {
+        await fetchInstructions();
+      }
+    } catch (error) {
+      console.error('Error toggling instruction:', error);
+    }
+  };
+
+  const handleDeleteInstruction = async (instructionId: number) => {
+    if (!confirm('Delete this instruction?')) return;
+
+    try {
+      const response = await fetch(`http://localhost:8000/teacher/config/instructions/${instructionId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+
+      if (response.ok) {
+        await fetchInstructions();
+      }
+    } catch (error) {
+      console.error('Error deleting instruction:', error);
+    }
+  };
+
+  const renderBackboardStatus = (file: File) => {
+    const statusConfig = {
+      'processed': { color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircle, text: 'Ready' },
+      'pending': { color: 'text-yellow-600', bg: 'bg-yellow-100', icon: Clock, text: 'Processing' },
+      'retrying': { color: 'text-blue-600', bg: 'bg-blue-100', icon: Clock, text: 'Retrying' },
+      'error': { color: 'text-red-600', bg: 'bg-red-100', icon: XCircle, text: 'Error' },
+      'conversion_failed': { color: 'text-red-600', bg: 'bg-red-100', icon: XCircle, text: 'Failed' },
+      'retry_failed': { color: 'text-red-600', bg: 'bg-red-100', icon: XCircle, text: 'Failed' },
+      'not_uploaded': { color: 'text-gray-600', bg: 'bg-gray-100', icon: AlertCircle, text: 'Not uploaded' },
+    };
+
+    const config = statusConfig[file.backboard_status as keyof typeof statusConfig] || statusConfig['not_uploaded'];
+    const Icon = config.icon;
+
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${config.bg} ${config.color}`}>
+        <Icon size={14} />
+        {config.text}
+      </span>
+    );
+  };
+
+  const getFilesForCategory = (categoryId: number) => {
     return files.filter(f => f.category_id === categoryId);
   };
 
+  const getUncategorizedFiles = () => {
+    return files.filter(f => f.category_id === null);
+  };
+
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      {/* Tab Navigation */}
-      <div className="tabs tabs-boxed bg-base-100 shadow-xl p-2">
-        <a
-          className={`tab tab-lg ${activeTab === 'dashboard' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          Dashboard
-        </a>
-        <a
-          className={`tab tab-lg ${activeTab === 'files' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('files')}
-        >
-          Files & Categories
-        </a>
-        <a
-          className={`tab tab-lg ${activeTab === 'config' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('config')}
-        >
-          Configuration
-        </a>
-        <a
-          className={`tab tab-lg ${activeTab === 'students' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('students')}
-        >
-          Students
-        </a>
-      </div>
-
-      {/* Dashboard Tab Content */}
-      {activeTab === 'dashboard' && (
-        <>
-          {dashboardLoading ? (
-            <div className="flex justify-center py-12">
-              <span className="loading loading-spinner loading-lg"></span>
-            </div>
-          ) : (
-            <>
-              {/* Class Overview Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Active Students</div>
-                  <div className="stat-value text-primary">{dashboardStats?.active_students || 0}</div>
-                  <div className="stat-desc">Students with sessions</div>
-                </div>
-
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-secondary">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Sessions Today</div>
-                  <div className="stat-value text-secondary">{dashboardStats?.sessions_today || 0}</div>
-                  <div className="stat-desc">Learning sessions</div>
-                </div>
-
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-success">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Class Accuracy</div>
-                  <div className="stat-value text-success">{dashboardStats?.class_accuracy || 0}%</div>
-                  <div className="stat-desc">Overall correct answers</div>
-                </div>
-
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-warning">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Needs Help</div>
-                  <div className="stat-value text-warning">{dashboardStats?.students_needing_help || 0}</div>
-                  <div className="stat-desc">Students struggling</div>
-                </div>
-              </div>
-
-              {/* Student Performance Table */}
-              <div className="card bg-base-100 shadow-xl">
-                <div className="card-body">
-                  <h2 className="card-title text-2xl mb-4">Student Performance</h2>
-
-                  {dashboardStudents.length === 0 ? (
-                    <p className="text-gray-500 italic">No student data yet. Students will appear here once they start learning.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="table table-zebra w-full">
-                        <thead>
-                          <tr>
-                            <th>Student</th>
-                            <th>Sessions</th>
-                            <th>Accuracy</th>
-                            <th>Last Active</th>
-                            <th>Status</th>
-                            <th>AI Insights</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {dashboardStudents.map((student) => (
-                            <tr key={student.student_id}>
-                              <td>
-                                <div>
-                                  <div className="font-bold">{student.full_name}</div>
-                                  <div className="text-sm opacity-50">@{student.username}</div>
-                                </div>
-                              </td>
-                              <td>{student.total_sessions}</td>
-                              <td>
-                                <div className="flex items-center gap-2">
-                                  <progress
-                                    className={`progress w-20 ${
-                                      student.accuracy_percent >= 70 ? 'progress-success' :
-                                      student.accuracy_percent >= 50 ? 'progress-warning' :
-                                      'progress-error'
-                                    }`}
-                                    value={student.accuracy_percent}
-                                    max="100"
-                                  ></progress>
-                                  <span className="text-sm">{student.accuracy_percent}%</span>
-                                </div>
-                              </td>
-                              <td>{student.last_active ? new Date(student.last_active).toLocaleString() : 'Never'}</td>
-                              <td>
-                                <span className={`badge ${
-                                  student.status === 'good' ? 'badge-success' :
-                                  student.status === 'warning' ? 'badge-warning' :
-                                  'badge-error'
-                                }`}>
-                                  {student.status === 'good' ? 'Good' :
-                                   student.status === 'warning' ? 'Fair' :
-                                   'Needs Help'}
-                                </span>
-                              </td>
-                              <td>
-                                <button
-                                  className={`btn btn-sm btn-primary ${
-                                    aiInsightsLoading && selectedStudentForInsights === student.student_id ? 'loading' : ''
-                                  }`}
-                                  onClick={() => fetchAIInsights(student.student_id)}
-                                  disabled={aiInsightsLoading}
-                                >
-                                  {aiInsightsLoading && selectedStudentForInsights === student.student_id ? '' : 'Get Insights'}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* AI Insights Panel */}
-              {(aiInsights || aiInsightsLoading) && (
-                <div className="card bg-base-100 shadow-xl border-2 border-primary">
-                  <div className="card-body">
-                    <div className="flex items-center justify-between mb-4">
-                      <h2 className="card-title text-2xl">
-                        AI Insights {aiInsights && `for ${aiInsights.student.full_name}`}
-                      </h2>
-                      <button
-                        className="btn btn-sm btn-ghost"
-                        onClick={() => {
-                          setAiInsights(null);
-                          setSelectedStudentForInsights(null);
-                        }}
-                      >
-                        Close
-                      </button>
-                    </div>
-
-                    {aiInsightsLoading ? (
-                      <div className="flex flex-col items-center justify-center py-8">
-                        <span className="loading loading-spinner loading-lg text-primary"></span>
-                        <p className="mt-4 text-gray-500">Analyzing student data with AI...</p>
-                      </div>
-                    ) : aiInsights ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="stat bg-base-200 rounded-lg">
-                          <div className="stat-title">Performance Summary</div>
-                          <div className="stat-value text-lg">
-                            {aiInsights.stats.accuracy_percent}% Accuracy
-                          </div>
-                          <div className="stat-desc">
-                            {aiInsights.stats.total_answers - aiInsights.stats.wrong_answers} correct / {aiInsights.stats.total_answers} total
-                          </div>
-                        </div>
-
-                        <div className="stat bg-primary text-primary-content rounded-lg">
-                          <div className="stat-title text-primary-content/70">Suggested Focus</div>
-                          <div className="stat-value text-lg">{aiInsights.insights.suggested_focus}</div>
-                          <div className="stat-desc text-primary-content/70">Priority area</div>
-                        </div>
-
-                        <div className="card bg-error/10 border border-error/20">
-                          <div className="card-body p-4">
-                            <h3 className="font-bold text-error">Areas of Struggle</h3>
-                            <p className="text-sm">{aiInsights.insights.struggles}</p>
-                          </div>
-                        </div>
-
-                        <div className="card bg-success/10 border border-success/20">
-                          <div className="card-body p-4">
-                            <h3 className="font-bold text-success">Strengths</h3>
-                            <p className="text-sm">{aiInsights.insights.strengths}</p>
-                          </div>
-                        </div>
-
-                        <div className="card bg-info/10 border border-info/20 md:col-span-2">
-                          <div className="card-body p-4">
-                            <h3 className="font-bold text-info">Recommendations</h3>
-                            {Array.isArray(aiInsights.insights.recommendations) ? (
-                              <ul className="list-disc list-inside text-sm space-y-1">
-                                {aiInsights.insights.recommendations.map((rec, idx) => (
-                                  <li key={idx}>{rec}</li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-sm whitespace-pre-wrap">{aiInsights.insights.recommendations}</p>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </>
-      )}
-
-      {/* Files Tab Content */}
-      {activeTab === 'files' && (
-        <>
-          {/* Upload Section */}
-          <div className="card bg-base-100 shadow-xl">
-        <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">Upload Lessons</h2>
-
-          <div className="form-control w-full">
-            <label className="label">
-              <span className="label-text">Pick one or more files to upload</span>
-            </label>
-            <input
-              type="file"
-              multiple={true}
-              onChange={handleFileSelection}
-              className="file-input file-input-bordered w-full"
-              accept="*/*"
-            />
-          </div>
-
-          {selectedFiles.length > 0 && (
-            <div className="mt-4">
-              <p className="font-semibold mb-2">Selected files ({selectedFiles.length}):</p>
-              <div className="space-y-2">
-                {selectedFiles.map((file, index) => (
-                  <div key={index} className="flex items-center justify-between bg-base-200 p-2 rounded">
-                    <span className="text-sm">{file.name} ({(file.size / 1024).toFixed(2)} KB)</span>
-                    <button
-                      onClick={() => removeSelectedFile(index)}
-                      className="btn btn-xs btn-circle btn-ghost"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="card-actions justify-end mt-4">
-            <button
-              onClick={handleFileUpload}
-              disabled={selectedFiles.length === 0 || uploading}
-              className="btn btn-primary"
-            >
-              {uploading ? (
-                <>
-                  <span className="loading loading-spinner"></span>
-                  Uploading {selectedFiles.length} file(s)...
-                </>
-              ) : (
-                `Upload ${selectedFiles.length > 0 ? selectedFiles.length + ' file(s)' : 'to Backboard'}`
-              )}
-            </button>
-          </div>
+    <div className="min-h-screen bg-gradient-to-b from-[#F5F1E8] to-[#E8DFD0] py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold text-[#4A4A4A] mb-2 flex items-center gap-3">
+            <Users className="w-10 h-10 text-[#8B4F47]" />
+            Teacher Dashboard
+          </h1>
+          <p className="text-[#4A4A4A]/70">Manage your classroom, track student progress, and organize learning materials</p>
         </div>
-      </div>
 
-      {/* Category Management Section */}
-      <div className="card bg-base-100 shadow-xl">
-        <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">Create Category</h2>
-
+        {/* Tab Navigation */}
+        <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-2 mb-6">
           <div className="flex gap-2">
-            <input
-              type="text"
-              value={newCategoryName}
-              onChange={(e) => setNewCategoryName(e.target.value)}
-              placeholder="Category name"
-              className="input input-bordered flex-1"
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateCategory()}
-            />
             <button
-              onClick={handleCreateCategory}
-              disabled={!newCategoryName.trim()}
-              className="btn btn-primary"
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
+                activeTab === 'dashboard'
+                  ? 'bg-[#8B4F47] text-white shadow-md'
+                  : 'text-[#4A4A4A] hover:bg-[#8B9D83]/10'
+              }`}
             >
-              Create
+              <BarChart3 size={20} />
+              Dashboard
+            </button>
+            <button
+              onClick={() => setActiveTab('files')}
+              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
+                activeTab === 'files'
+                  ? 'bg-[#8B4F47] text-white shadow-md'
+                  : 'text-[#4A4A4A] hover:bg-[#8B9D83]/10'
+              }`}
+            >
+              <FileText size={20} />
+              Learning Materials
+            </button>
+            <button
+              onClick={() => setActiveTab('config')}
+              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
+                activeTab === 'config'
+                  ? 'bg-[#8B4F47] text-white shadow-md'
+                  : 'text-[#4A4A4A] hover:bg-[#8B9D83]/10'
+              }`}
+            >
+              <Settings size={20} />
+              AI Settings
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Categories List Section */}
-      <div className="card bg-base-100 shadow-xl">
-        <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">Manage Categories</h2>
-
-          {categories.length > 0 ? (
-            <div className="space-y-2">
-              {categories.map((category) => (
-                <div key={category.id} className="card bg-base-200 shadow">
-                  <div className="card-body p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <p className="font-semibold">{category.name}</p>
-                        <p className="text-sm text-gray-500">
-                          {getFilesForCategory(category.id).length} file(s)
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleToggleCategoryActive(category.id, category.is_active)}
-                          className={`btn btn-sm ${category.is_active ? 'btn-success' : 'btn-outline'}`}
-                        >
-                          {category.is_active ? 'Active' : 'Inactive'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCategory(category.id)}
-                          className="btn btn-sm btn-error"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
+        {/* Dashboard Tab */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <Users className="w-8 h-8 text-[#8B4F47]" />
+                  <div className="text-right">
+                    <p className="text-3xl font-bold text-[#4A4A4A]">
+                      {statsLoading ? '...' : stats?.active_students || 0}
+                    </p>
+                    <p className="text-sm text-[#4A4A4A]/60">Active Students</p>
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 italic">No categories yet. Create one above!</p>
-          )}
-        </div>
-      </div>
+              </div>
 
-      {/* File Management Section */}
-      <div className="card bg-base-100 shadow-xl">
-        <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">File Management</h2>
-
-          {/* Uncategorized Files */}
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-2">Uncategorized</h3>
-            <div className="space-y-2">
-              {getFilesForCategory(null).map((file) => (
-                <div key={file.id} className="card bg-base-200 shadow">
-                  <div className="card-body p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="font-semibold">{file.original_filename}</p>
-                          {renderBackboardStatus(file)}
-                        </div>
-                        <p className="text-sm text-gray-500">
-                          {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="flex gap-2 flex-wrap">
-                        <select
-                          className="select select-bordered select-sm"
-                          value={file.category_id || ''}
-                          onChange={(e) => handleMoveToCategory(file.id, e.target.value ? Number(e.target.value) : null)}
-                        >
-                          <option value="">Move to...</option>
-                          {categories.map((cat) => (
-                            <option key={cat.id} value={cat.id}>{cat.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => handleToggleActive(file.id, file.is_active)}
-                          className={`btn btn-sm ${file.is_active ? 'btn-success' : 'btn-outline'}`}
-                        >
-                          {file.is_active ? 'Active' : 'Activate'}
-                        </button>
-                        <button
-                          onClick={() => handleToggleSolve(file.id)}
-                          className={`btn btn-sm ${file.solve_enabled !== false ? 'btn-warning' : 'btn-outline'}`}
-                          title={file.solve_enabled !== false ? 'Students can use Show Answer' : 'Show Answer is disabled'}
-                        >
-                          {file.solve_enabled !== false ? 'Solve On' : 'Solve Off'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteFile(file.id)}
-                          className="btn btn-sm btn-error"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
+              <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <Calendar className="w-8 h-8 text-[#8B4F47]" />
+                  <div className="text-right">
+                    <p className="text-3xl font-bold text-[#4A4A4A]">
+                      {statsLoading ? '...' : stats?.sessions_today || 0}
+                    </p>
+                    <p className="text-sm text-[#4A4A4A]/60">Sessions Today</p>
                   </div>
                 </div>
-              ))}
-              {getFilesForCategory(null).length === 0 && (
-                <p className="text-gray-500 italic">No uncategorized files</p>
-              )}
-            </div>
-          </div>
+              </div>
 
-          {/* Categorized Files */}
-          {categories.map((category) => (
-            <div key={category.id} className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">{category.name}</h3>
-              <div className="space-y-2">
-                {getFilesForCategory(category.id).map((file) => (
-                  <div key={file.id} className="card bg-base-200 shadow">
-                    <div className="card-body p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="font-semibold">{file.original_filename}</p>
-                            {renderBackboardStatus(file)}
-                          </div>
-                          <p className="text-sm text-gray-500">
-                            {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="flex gap-2 flex-wrap">
-                          <select
-                            className="select select-bordered select-sm"
-                            value={file.category_id || ''}
-                            onChange={(e) => handleMoveToCategory(file.id, e.target.value ? Number(e.target.value) : null)}
-                          >
-                            <option value="">Uncategorized</option>
-                            {categories.map((cat) => (
-                              <option key={cat.id} value={cat.id}>{cat.name}</option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => handleToggleActive(file.id, file.is_active)}
-                            className={`btn btn-sm ${file.is_active ? 'btn-success' : 'btn-outline'}`}
-                          >
-                            {file.is_active ? 'Active' : 'Activate'}
-                          </button>
-                          <button
-                            onClick={() => handleToggleSolve(file.id)}
-                            className={`btn btn-sm ${file.solve_enabled !== false ? 'btn-warning' : 'btn-outline'}`}
-                            title={file.solve_enabled !== false ? 'Students can use Show Answer' : 'Show Answer is disabled'}
-                          >
-                            {file.solve_enabled !== false ? 'Solve On' : 'Solve Off'}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteFile(file.id)}
-                            className="btn btn-sm btn-error"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+              <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <TrendingUp className="w-8 h-8 text-[#6B9FA3]" />
+                  <div className="text-right">
+                    <p className="text-3xl font-bold text-[#6B9FA3]">
+                      {statsLoading ? '...' : `${stats?.class_accuracy || 0}%`}
+                    </p>
+                    <p className="text-sm text-[#4A4A4A]/60">Class Accuracy</p>
                   </div>
-                ))}
-                {getFilesForCategory(category.id).length === 0 && (
-                  <p className="text-gray-500 italic">No files in this category</p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-        </>
-      )}
-
-      {/* Configuration Tab Content */}
-      {activeTab === 'config' && (
-        <>
-          <div className="card bg-base-100 shadow-xl">
-            <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Custom Instructions</h2>
-              <p className="text-sm text-gray-600 mb-4">
-                Add custom rules and instructions that will guide the AI when teaching students.
-                These instructions will be included in every conversation.
-              </p>
-
-              {/* Add Instruction Form */}
-              <div className="card bg-base-200 p-4 mb-6">
-                <h3 className="font-semibold mb-3">Add New Instruction</h3>
-                <input
-                  type="text"
-                  placeholder="Instruction Name (e.g., 'Focus on Multiplication')"
-                  className="input input-bordered mb-3 w-full"
-                  value={newInstruction.name}
-                  onChange={(e) => setNewInstruction({ ...newInstruction, name: e.target.value })}
-                />
-                <textarea
-                  placeholder="Instruction text (e.g., 'Only ask multiplication questions between 1-12')"
-                  className="textarea textarea-bordered mb-3 w-full h-24"
-                  value={newInstruction.value}
-                  onChange={(e) => setNewInstruction({ ...newInstruction, value: e.target.value })}
-                />
-                <button
-                  className="btn btn-primary"
-                  onClick={handleAddInstruction}
-                  disabled={!newInstruction.name.trim() || !newInstruction.value.trim()}
-                >
-                  Add Instruction
-                </button>
-              </div>
-
-              {/* Instructions List */}
-              <div className="space-y-3">
-                <h3 className="font-semibold text-lg">Active Instructions</h3>
-                {instructions.length > 0 ? (
-                  instructions.map((inst) => (
-                    <div key={inst.id} className="card bg-base-200 shadow">
-                      <div className="card-body p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1">
-                            <h4 className="font-bold text-lg">{inst.instruction_name}</h4>
-                            <p className="text-sm mt-2 whitespace-pre-wrap">{inst.instruction_value}</p>
-                            <p className="text-xs text-gray-500 mt-2">
-                              Created: {new Date(inst.created_at).toLocaleDateString()}
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <button
-                              className={`btn btn-sm ${inst.is_active ? 'btn-success' : 'btn-outline'}`}
-                              onClick={() => handleToggleInstruction(inst.id)}
-                            >
-                              {inst.is_active ? 'Active' : 'Inactive'}
-                            </button>
-                            <button
-                              className="btn btn-sm btn-error"
-                              onClick={() => handleDeleteInstruction(inst.id)}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-gray-500 italic">No instructions yet. Add one above to customize the AI's behavior!</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Info Card */}
-          <div className="card bg-info text-info-content shadow-xl">
-            <div className="card-body">
-              <h3 className="card-title">How Custom Instructions Work</h3>
-              <ul className="list-disc list-inside space-y-1">
-                <li>Instructions are automatically included in every student conversation</li>
-                <li>Active files and instructions work together to guide the AI</li>
-                <li>Toggle instructions on/off to test different teaching approaches</li>
-                <li>Changes apply to new conversations immediately</li>
-              </ul>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Students Tab Content */}
-      {activeTab === 'students' && (
-        <>
-          {/* Student List */}
-          <div className="card bg-base-100 shadow-xl">
-            <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Student List</h2>
-
-              {studentsLoading && (
-                <div className="flex justify-center py-8">
-                  <span className="loading loading-spinner loading-lg"></span>
                 </div>
-              )}
+              </div>
 
-              {studentsError && (
-                <div className="alert alert-error">
-                  <span>{studentsError}</span>
+              <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+                <div className="flex items-center justify-between mb-2">
+                  <AlertTriangle className="w-8 h-8 text-[#8B4F47]" />
+                  <div className="text-right">
+                    <p className="text-3xl font-bold text-[#8B4F47]">
+                      {statsLoading ? '...' : stats?.students_needing_help || 0}
+                    </p>
+                    <p className="text-sm text-[#4A4A4A]/60">Need Help</p>
+                  </div>
                 </div>
-              )}
+              </div>
+            </div>
 
-              {!studentsLoading && !studentsError && students.length === 0 && (
-                <p className="text-gray-500 italic">No students registered yet.</p>
-              )}
+            {/* Student Performance Table */}
+            <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+              <h2 className="text-2xl font-bold text-[#4A4A4A] mb-4 flex items-center gap-2">
+                <Users className="w-6 h-6 text-[#8B4F47]" />
+                Student Performance
+              </h2>
 
-              {!studentsLoading && !studentsError && students.length > 0 && (
+              {studentsLoading ? (
+                <div className="text-center py-12">
+                  <div className="inline-block w-8 h-8 border-4 border-[#8B4F47] border-t-transparent rounded-full animate-spin"></div>
+                  <p className="text-[#4A4A4A]/60 mt-4">Loading student data...</p>
+                </div>
+              ) : students.length === 0 ? (
+                <div className="text-center py-12">
+                  <FileText className="w-16 h-16 mx-auto text-[#4A4A4A]/30 mb-4" />
+                  <p className="text-[#4A4A4A]/60">No student data yet. Students will appear here once they start learning.</p>
+                </div>
+              ) : (
                 <div className="overflow-x-auto">
-                  <table className="table table-zebra w-full">
+                  <table className="w-full">
                     <thead>
-                      <tr>
-                        <th>Username</th>
-                        <th>Full Name</th>
-                        <th>Email</th>
-                        <th>Status</th>
+                      <tr className="border-b-2 border-[#8B9D83]/20">
+                        <th className="text-left py-3 px-4 font-semibold text-[#4A4A4A]">Student</th>
+                        <th className="text-center py-3 px-4 font-semibold text-[#4A4A4A]">Sessions</th>
+                        <th className="text-center py-3 px-4 font-semibold text-[#4A4A4A]">Accuracy</th>
+                        <th className="text-left py-3 px-4 font-semibold text-[#4A4A4A]">Last Active</th>
+                        <th className="text-center py-3 px-4 font-semibold text-[#4A4A4A]">Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {students.map((student) => (
-                        <tr key={student.username}>
-                          <td>{student.username}</td>
-                          <td>{student.full_name}</td>
-                          <td>{student.email}</td>
-                          <td>
-                            <span className={`badge ${student.account_active ? 'badge-success' : 'badge-error'}`}>
-                              {student.account_active ? 'Active' : 'Inactive'}
+                        <tr key={student.student_id} className="border-b border-[#8B9D83]/10 hover:bg-[#8B9D83]/5 transition-colors">
+                          <td className="py-4 px-4">
+                            <div>
+                              <div className="font-semibold text-[#4A4A4A]">{student.full_name}</div>
+                              <div className="text-sm text-[#4A4A4A]/60">@{student.username}</div>
+                            </div>
+                          </td>
+                          <td className="text-center py-4 px-4 text-[#4A4A4A]">{student.total_sessions}</td>
+                          <td className="text-center py-4 px-4">
+                            <span className={`font-semibold ${
+                              student.accuracy_percent >= 70 ? 'text-green-600' :
+                              student.accuracy_percent >= 50 ? 'text-yellow-600' :
+                              'text-red-600'
+                            }`}>
+                              {student.accuracy_percent}%
+                            </span>
+                          </td>
+                          <td className="py-4 px-4 text-[#4A4A4A]/70 text-sm">
+                            {student.last_active ? new Date(student.last_active).toLocaleString() : 'Never'}
+                          </td>
+                          <td className="text-center py-4 px-4">
+                            <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold ${
+                              student.status === 'good' ? 'bg-green-100 text-green-700' :
+                              student.status === 'warning' ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-red-100 text-red-700'
+                            }`}>
+                              {student.status === 'good' ? <CheckCircle size={14} /> : student.status === 'warning' ? <Clock size={14} /> : <AlertCircle size={14} />}
+                              {student.status === 'good' ? 'Good' : student.status === 'warning' ? 'Fair' : 'Needs Help'}
                             </span>
                           </td>
                         </tr>
@@ -1318,234 +625,318 @@ const Teacher: React.FC = () => {
               )}
             </div>
           </div>
+        )}
 
-          {/* Student Chat Sessions - Ended Conversations */}
-          <div className="card bg-base-100 shadow-xl">
-            <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Student Chat Sessions</h2>
-              
-              {endedConversationsLoading && (
-                <div className="flex justify-center py-8">
-                  <span className="loading loading-spinner loading-lg"></span>
-                </div>
-              )}
+        {/* Files Tab */}
+        {activeTab === 'files' && (
+          <div className="space-y-6">
+            {/* Upload Section */}
+            <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+              <h2 className="text-2xl font-bold text-[#4A4A4A] mb-4 flex items-center gap-2">
+                <Upload className="w-6 h-6 text-[#8B4F47]" />
+                Upload Learning Materials
+              </h2>
+              <p className="text-[#4A4A4A]/70 mb-4">
+                Upload PDFs, documents, or markdown files. They will be processed and made available to students.
+              </p>
+              <div className="flex gap-3">
+                <label className="flex-1">
+                  <input
+                    type="file"
+                    multiple
+                    onChange={handleFileUpload}
+                    disabled={uploading}
+                    className="hidden"
+                  />
+                  <div className="w-full px-6 py-4 bg-[#8B4F47] text-white font-semibold rounded-xl hover:bg-[#A0605A] transition-all duration-300 cursor-pointer text-center disabled:opacity-50 shadow-md">
+                    {uploading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Uploading...
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center gap-2">
+                        <Upload size={20} />
+                        Select Files to Upload
+                      </span>
+                    )}
+                  </div>
+                </label>
+              </div>
+            </div>
 
-              {!endedConversationsLoading && endedConversations.length === 0 && (
-                <p className="text-gray-500 italic">No ended chat sessions yet. Students need to end their chats first.</p>
-              )}
+            {/* Category Management */}
+            <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+              <h2 className="text-2xl font-bold text-[#4A4A4A] mb-4 flex items-center gap-2">
+                <Tag className="w-6 h-6 text-[#8B4F47]" />
+                Categories
+              </h2>
+              <div className="flex gap-3 mb-6">
+                <input
+                  type="text"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateCategory()}
+                  placeholder="New category name..."
+                  className="flex-1 px-4 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-xl focus:outline-none focus:border-[#8B4F47] text-[#4A4A4A]"
+                />
+                <button
+                  onClick={handleCreateCategory}
+                  className="px-6 py-3 bg-[#8B9D83] text-white font-semibold rounded-xl hover:bg-[#6B9FA3] transition-all duration-300 shadow-md flex items-center gap-2"
+                >
+                  <Plus size={20} />
+                  Add Category
+                </button>
+              </div>
 
-              {!endedConversationsLoading && endedConversations.length > 0 && (() => {
-                // Group ended conversations by student
-                const grouped: Record<string, EndedConversation[]> = {};
-                endedConversations.forEach(conv => {
-                  const studentKey = conv.student_name || conv.student_username || 'Student';
-                  if (!grouped[studentKey]) {
-                    grouped[studentKey] = [];
-                  }
-                  grouped[studentKey].push(conv);
-                });
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {categoriesLoading ? (
+                  <div className="col-span-full text-center py-8">
+                    <div className="inline-block w-6 h-6 border-4 border-[#8B4F47] border-t-transparent rounded-full animate-spin"></div>
+                  </div>
+                ) : categories.length === 0 ? (
+                  <div className="col-span-full text-center py-8 text-[#4A4A4A]/60">
+                    No categories yet. Create one above!
+                  </div>
+                ) : (
+                  categories.map((category) => (
+                    <div key={category.id} className="bg-white rounded-xl p-4 border-2 border-[#8B9D83]/20 hover:border-[#8B9D83] transition-all">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-semibold text-[#4A4A4A] flex-1">{category.name}</h3>
+                        <button
+                          onClick={() => handleDeleteCategory(category.id)}
+                          className="text-[#8B4F47] hover:text-red-600 transition-colors"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+                      <p className="text-sm text-[#4A4A4A]/60">
+                        {getFilesForCategory(category.id).length} file(s)
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Files by Category */}
+            <div className="space-y-6">
+              {categories.map((category) => {
+                const categoryFiles = getFilesForCategory(category.id);
+                if (categoryFiles.length === 0) return null;
 
                 return (
-                  <div className="space-y-4">
-                    {Object.entries(grouped).map(([studentName, sessions]) => (
-                      <div key={studentName} className="collapse collapse-arrow bg-base-200">
-                        <input type="checkbox" defaultChecked={false} />
-                        <div className="collapse-title text-lg font-semibold">
-                          {studentName} ({sessions.length} session{sessions.length > 1 ? 's' : ''})
-                        </div>
-                        <div className="collapse-content">
-                          <div className="space-y-2 mt-2">
-                            {sessions.map((session) => (
-                              <div key={session.id} className="card bg-base-100 shadow">
-                                <div className="card-body p-4">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex-1">
-                                      <p className="font-semibold">
-                                        Session {session.id} - Thread: {session.thread_id.substring(0, 8)}...
-                                      </p>
-                                      <p className="text-sm text-gray-500">
-                                        Started: {new Date(session.started_at).toLocaleString()} • 
-                                        Ended: {new Date(session.ended_at).toLocaleString()}
-                                      </p>
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <button
-                                        onClick={() => toggleEndedSession(session.id, session.thread_id)}
-                                        className="btn btn-sm btn-primary"
-                                      >
-                                        {expandedEndedSessions.has(session.id) ? 'Hide' : 'View'} Chat
-                                      </button>
-                                    </div>
-                                  </div>
-                                  
-                                  {expandedEndedSessions.has(session.id) && selectedEndedThreadId === session.thread_id && (
-                                    <div className="mt-4 border-t pt-4">
-                                      <h4 className="font-semibold mb-2">Chat History ({endedChatHistory.length} messages)</h4>
-                                      <div className="bg-base-200 rounded-lg p-4 max-h-96 overflow-y-auto space-y-3">
-                                        {endedChatHistory.length > 0 ? (
-                                          endedChatHistory.map((msg, idx) => (
-                                            <div key={idx} className={`chat ${msg.role === 'user' ? 'chat-end' : 'chat-start'}`}>
-                                              <div className="chat-header opacity-70 text-xs">
-                                                {msg.role === 'user' ? 'Student' : 'Assistant'} • {new Date(msg.created_at).toLocaleString()}
-                                              </div>
-                                              <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-primary' : 'chat-bubble-secondary'}`}>
-                                                {msg.content}
-                                              </div>
-                                            </div>
-                                          ))
-                                        ) : (
-                                          <p className="text-gray-500 italic text-center py-4">No messages found.</p>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
+                  <div key={category.id} className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+                    <h2 className="text-xl font-bold text-[#4A4A4A] mb-4 flex items-center gap-2">
+                      <FolderOpen size={20} className="text-[#8B4F47]" />
+                      {category.name}
+                    </h2>
+                    <div className="space-y-3">
+                      {categoryFiles.map((file) => (
+                        <div key={file.id} className="bg-white rounded-xl p-4 border border-[#8B9D83]/20 hover:shadow-md transition-all">
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-2">
+                                <h3 className="font-semibold text-[#4A4A4A] truncate">{file.original_filename}</h3>
+                                {renderBackboardStatus(file)}
                               </div>
-                            ))}
+                              <p className="text-sm text-[#4A4A4A]/60">
+                                {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleToggleActive(file.id, file.is_active)}
+                                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
+                                  file.is_active
+                                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                }`}
+                              >
+                                {file.is_active ? <Eye size={16} /> : <EyeOff size={16} />}
+                                {file.is_active ? 'Active' : 'Inactive'}
+                              </button>
+                              <button
+                                onClick={() => handleToggleSolve(file.id)}
+                                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
+                                  file.solve_enabled
+                                    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                }`}
+                                title={file.solve_enabled ? 'Students can see answers' : 'Answer button disabled'}
+                              >
+                                {file.solve_enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                                Solve
+                              </button>
+                              <button
+                                onClick={() => handleDeleteFile(file.id)}
+                                className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-all font-medium flex items-center gap-1"
+                              >
+                                <Trash2 size={16} />
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Uncategorized Files */}
+              {getUncategorizedFiles().length > 0 && (
+                <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+                  <h2 className="text-xl font-bold text-[#4A4A4A] mb-4 flex items-center gap-2">
+                    <FileText size={20} className="text-[#8B4F47]" />
+                    Uncategorized Files
+                  </h2>
+                  <div className="space-y-3">
+                    {getUncategorizedFiles().map((file) => (
+                      <div key={file.id} className="bg-white rounded-xl p-4 border border-[#8B9D83]/20 hover:shadow-md transition-all">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-2">
+                              <h3 className="font-semibold text-[#4A4A4A] truncate">{file.original_filename}</h3>
+                              {renderBackboardStatus(file)}
+                            </div>
+                            <p className="text-sm text-[#4A4A4A]/60">
+                              {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <select
+                              onChange={(e) => handleMoveToCategory(file.id, e.target.value ? parseInt(e.target.value) : null)}
+                              className="px-3 py-2 bg-white border-2 border-[#8B9D83]/30 rounded-lg focus:outline-none focus:border-[#8B4F47] text-sm"
+                              defaultValue=""
+                            >
+                              <option value="">Move to...</option>
+                              {categories.map((cat) => (
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => handleToggleActive(file.id, file.is_active)}
+                              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
+                                file.is_active
+                                  ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {file.is_active ? <Eye size={16} /> : <EyeOff size={16} />}
+                              {file.is_active ? 'Active' : 'Inactive'}
+                            </button>
+                            <button
+                              onClick={() => handleToggleSolve(file.id)}
+                              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
+                                file.solve_enabled
+                                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {file.solve_enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                              Solve
+                            </button>
+                            <button
+                              onClick={() => handleDeleteFile(file.id)}
+                              className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-all font-medium flex items-center gap-1"
+                            >
+                              <Trash2 size={16} />
+                              Delete
+                            </button>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* Conversation Viewer - Accordion Style (Saurav's UX) */}
-          <div className="card bg-base-100 shadow-xl">
-            <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Student Conversations</h2>
-
-              {conversationsLoading && (
-                <div className="flex justify-center py-8">
-                  <span className="loading loading-spinner loading-lg"></span>
                 </div>
               )}
+            </div>
+          </div>
+        )}
 
-              {!conversationsLoading && conversations.length === 0 && (
-                <p className="text-gray-500 italic">No conversations yet. Students will appear here once they start learning.</p>
-              )}
+        {/* Config Tab */}
+        {activeTab === 'config' && (
+          <div className="space-y-6">
+            <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
+              <h2 className="text-2xl font-bold text-[#4A4A4A] mb-4 flex items-center gap-2">
+                <Settings className="w-6 h-6 text-[#8B4F47]" />
+                AI Instructions
+              </h2>
+              <p className="text-[#4A4A4A]/70 mb-6">
+                Add custom rules and instructions that will guide the AI when teaching students. These instructions will be included in every conversation.
+              </p>
 
-              {!conversationsLoading && conversations.length > 0 && (
+              {/* Add Instruction Form */}
+              <div className="bg-[#8B9D83]/5 rounded-xl p-4 mb-6">
+                <input
+                  type="text"
+                  value={newInstructionName}
+                  onChange={(e) => setNewInstructionName(e.target.value)}
+                  placeholder="Instruction name (e.g., 'Be Encouraging')"
+                  className="w-full px-4 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-xl focus:outline-none focus:border-[#8B4F47] text-[#4A4A4A] mb-3"
+                />
+                <textarea
+                  value={newInstructionValue}
+                  onChange={(e) => setNewInstructionValue(e.target.value)}
+                  placeholder="Instruction details (e.g., 'Always praise student effort before correcting mistakes')"
+                  rows={3}
+                  className="w-full px-4 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-xl focus:outline-none focus:border-[#8B4F47] text-[#4A4A4A] mb-3 resize-none"
+                />
+                <button
+                  onClick={handleCreateInstruction}
+                  className="px-6 py-3 bg-[#8B4F47] text-white font-semibold rounded-xl hover:bg-[#A0605A] transition-all duration-300 shadow-md flex items-center gap-2"
+                >
+                  <Plus size={20} />
+                  Add Instruction
+                </button>
+              </div>
+
+              {/* Instructions List */}
+              {instructionsLoading ? (
+                <div className="text-center py-12">
+                  <div className="inline-block w-8 h-8 border-4 border-[#8B4F47] border-t-transparent rounded-full animate-spin"></div>
+                </div>
+              ) : instructions.length === 0 ? (
+                <div className="text-center py-12">
+                  <Settings className="w-16 h-16 mx-auto text-[#4A4A4A]/30 mb-4" />
+                  <p className="text-[#4A4A4A]/60">No instructions yet. Add one above to customize the AI's behavior!</p>
+                </div>
+              ) : (
                 <div className="space-y-3">
-                  {getConversationsGroupedByStudent().map(({ student, conversations: studentConvs }) => (
-                    <div key={student.id} className="collapse collapse-arrow bg-base-200 rounded-lg">
-                      <input
-                        type="checkbox"
-                        checked={expandedStudents.has(student.id)}
-                        onChange={() => toggleStudentExpanded(student.id)}
-                      />
-                      <div className="collapse-title text-lg font-semibold flex items-center gap-3">
-                        <span>{student.name}</span>
-                        <span className="badge badge-neutral badge-sm">
-                          {studentConvs.length} session{studentConvs.length !== 1 ? 's' : ''}
-                        </span>
-                        {studentConvs.some(c => c.has_wrong_answers) && (
-                          <span className="badge badge-warning badge-sm">Needs Review</span>
-                        )}
-                      </div>
-                      <div className="collapse-content">
-                        <div className="space-y-3 pt-2">
-                          {studentConvs.map((conv) => (
-                            <div key={conv.id} className="card bg-base-100 shadow">
-                              <div className="card-body p-4">
-                                {/* Session Header */}
-                                <div className="flex items-center justify-between">
-                                  <div className="flex-1">
-                                    <p className="font-semibold">
-                                      Session #{conv.id}
-                                    </p>
-                                    <p className="text-sm text-gray-500">
-                                      Started: {new Date(conv.started_at).toLocaleString()}
-                                    </p>
-                                    {conv.last_message_at && (
-                                      <p className="text-sm text-gray-500">
-                                        Last activity: {new Date(conv.last_message_at).toLocaleString()}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    {conv.has_wrong_answers ? (
-                                      <span className="badge badge-error badge-sm">Has Errors</span>
-                                    ) : (
-                                      <span className="badge badge-success badge-sm">All Correct</span>
-                                    )}
-                                    <button
-                                      onClick={() => toggleConversationExpanded(conv)}
-                                      className="btn btn-sm btn-primary"
-                                    >
-                                      {expandedConversations.has(conv.id) ? 'Hide' : 'View'} Chat
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {/* Expanded Chat History */}
-                                {expandedConversations.has(conv.id) && (
-                                  <div className="mt-4 border-t pt-4">
-                                    {messagesLoading && selectedConversation?.id === conv.id ? (
-                                      <div className="flex justify-center py-4">
-                                        <span className="loading loading-spinner loading-md"></span>
-                                      </div>
-                                    ) : selectedConversation?.id === conv.id && conversationMessages.length > 0 ? (
-                                      <>
-                                        {/* Stats Header */}
-                                        <div className="flex justify-between items-center mb-3">
-                                          <h4 className="font-semibold">
-                                            Chat History ({conversationMessages.length} messages)
-                                          </h4>
-                                          <div className="flex gap-2">
-                                            <span className="badge badge-success badge-sm">
-                                              {conversationMessages.filter(m => m.role === 'user' && !m.is_wrong).length} correct
-                                            </span>
-                                            <span className="badge badge-error badge-sm">
-                                              {conversationMessages.filter(m => m.role === 'user' && m.is_wrong).length} wrong
-                                            </span>
-                                          </div>
-                                        </div>
-
-                                        {/* Chat Bubbles */}
-                                        <div className="bg-base-200 rounded-lg p-4 max-h-96 overflow-y-auto space-y-3">
-                                          {conversationMessages.map((msg, idx) => (
-                                            <div key={msg.id || idx} className={`chat ${msg.role === 'user' ? 'chat-end' : 'chat-start'}`}>
-                                              <div className="chat-header text-xs mb-1">
-                                                {msg.role === 'user' ? 'Student' : 'StoryBot'}
-                                                {msg.role === 'user' && (
-                                                  msg.is_wrong ? (
-                                                    <span className="ml-2 badge badge-error badge-xs">WRONG</span>
-                                                  ) : (
-                                                    <span className="ml-2 badge badge-success badge-xs">CORRECT</span>
-                                                  )
-                                                )}
-                                              </div>
-                                              <div
-                                                className={`chat-bubble text-sm ${
-                                                  msg.role === 'user'
-                                                    ? msg.is_wrong
-                                                      ? 'bg-error text-error-content'
-                                                      : 'bg-success text-success-content'
-                                                    : 'chat-bubble-secondary'
-                                                }`}
-                                              >
-                                                {msg.content}
-                                              </div>
-                                              <div className="chat-footer text-xs opacity-50">
-                                                {new Date(msg.created_at).toLocaleTimeString()}
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </>
-                                    ) : (
-                                      <p className="text-gray-500 italic text-center py-4">
-                                        No messages in this conversation yet.
-                                      </p>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ))}
+                  {instructions.map((inst) => (
+                    <div key={inst.id} className={`bg-white rounded-xl p-4 border-2 transition-all ${
+                      inst.is_active 
+                        ? 'border-[#8B9D83] shadow-md' 
+                        : 'border-[#8B9D83]/20 opacity-60'
+                    }`}>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <h3 className="font-bold text-[#4A4A4A] mb-2">{inst.instruction_name}</h3>
+                          <p className="text-[#4A4A4A]/70 mb-2">{inst.instruction_value}</p>
+                          <p className="text-xs text-[#4A4A4A]/50">
+                            Created: {new Date(inst.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleToggleInstruction(inst.id)}
+                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
+                              inst.is_active
+                                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            {inst.is_active ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                            {inst.is_active ? 'Active' : 'Inactive'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteInstruction(inst.id)}
+                            className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-all font-medium flex items-center gap-1"
+                          >
+                            <Trash2 size={16} />
+                            Delete
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1554,8 +945,8 @@ const Teacher: React.FC = () => {
               )}
             </div>
           </div>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 };
