@@ -67,6 +67,43 @@ interface ConversationMessage {
   created_at: string;
 }
 
+// Dashboard interfaces
+interface DashboardStats {
+  active_students: number;
+  sessions_today: number;
+  class_accuracy: number;
+  students_needing_help: number;
+}
+
+interface DashboardStudent {
+  student_id: number;
+  username: string;
+  full_name: string;
+  total_sessions: number;
+  accuracy_percent: number;
+  last_active: string;
+  status: 'good' | 'warning' | 'needs_help';
+}
+
+interface AIInsights {
+  student: {
+    id: number;
+    username: string;
+    full_name: string;
+  };
+  stats: {
+    total_answers: number;
+    wrong_answers: number;
+    accuracy_percent: number;
+  };
+  insights: {
+    struggles: string;
+    strengths: string;
+    recommendations: string | string[];
+    suggested_focus: string;
+  };
+}
+
 const Teacher: React.FC = () => {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -76,9 +113,17 @@ const Teacher: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   // Configuration tab state
-  const [activeTab, setActiveTab] = useState<'files' | 'config' | 'students'>('files');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'files' | 'config' | 'students'>('dashboard');
   const [instructions, setInstructions] = useState<Instruction[]>([]);
   const [newInstruction, setNewInstruction] = useState({ name: '', value: '' });
+
+  // Dashboard tab state
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [dashboardStudents, setDashboardStudents] = useState<DashboardStudent[]>([]);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [aiInsights, setAiInsights] = useState<AIInsights | null>(null);
+  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
+  const [selectedStudentForInsights, setSelectedStudentForInsights] = useState<number | null>(null);
 
   // Students tab state
   const [students, setStudents] = useState<Student[]>([]);
@@ -143,6 +188,9 @@ const Teacher: React.FC = () => {
   }, [files]);
 
   useEffect(() => {
+    if (activeTab === 'dashboard') {
+      fetchDashboardData();
+    }
     if (activeTab === 'config') {
       fetchInstructions();
     }
@@ -152,6 +200,51 @@ const Teacher: React.FC = () => {
       fetchEndedConversations();
     }
   }, [activeTab]);
+
+  const fetchDashboardData = async () => {
+    setDashboardLoading(true);
+    try {
+      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+      if (!token) return;
+
+      const [statsRes, studentsRes] = await Promise.all([
+        axios.get('http://localhost:8000/teacher/dashboard/stats', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        axios.get('http://localhost:8000/teacher/dashboard/students', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
+
+      setDashboardStats(statsRes.data);
+      setDashboardStudents(studentsRes.data.students);
+    } catch (err: any) {
+      console.error("Failed to fetch dashboard data", err);
+    } finally {
+      setDashboardLoading(false);
+    }
+  };
+
+  const fetchAIInsights = async (studentId: number) => {
+    setAiInsightsLoading(true);
+    setSelectedStudentForInsights(studentId);
+    setAiInsights(null);
+    try {
+      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+      if (!token) return;
+
+      const response = await axios.get(`http://localhost:8000/teacher/dashboard/student/${studentId}/ai-insights`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setAiInsights(response.data);
+    } catch (err: any) {
+      console.error("Failed to fetch AI insights", err);
+      alert('Failed to get AI insights: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setAiInsightsLoading(false);
+    }
+  };
 
   const fetchStudents = async () => {
     setStudentsLoading(true);
@@ -570,6 +663,12 @@ const Teacher: React.FC = () => {
       {/* Tab Navigation */}
       <div className="tabs tabs-boxed bg-base-100 shadow-xl p-2">
         <a
+          className={`tab tab-lg ${activeTab === 'dashboard' ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          Dashboard
+        </a>
+        <a
           className={`tab tab-lg ${activeTab === 'files' ? 'tab-active' : ''}`}
           onClick={() => setActiveTab('files')}
         >
@@ -588,6 +687,218 @@ const Teacher: React.FC = () => {
           Students
         </a>
       </div>
+
+      {/* Dashboard Tab Content */}
+      {activeTab === 'dashboard' && (
+        <>
+          {dashboardLoading ? (
+            <div className="flex justify-center py-12">
+              <span className="loading loading-spinner loading-lg"></span>
+            </div>
+          ) : (
+            <>
+              {/* Class Overview Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="stat bg-base-100 shadow-xl rounded-lg">
+                  <div className="stat-figure text-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  </div>
+                  <div className="stat-title">Active Students</div>
+                  <div className="stat-value text-primary">{dashboardStats?.active_students || 0}</div>
+                  <div className="stat-desc">Students with sessions</div>
+                </div>
+
+                <div className="stat bg-base-100 shadow-xl rounded-lg">
+                  <div className="stat-figure text-secondary">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </div>
+                  <div className="stat-title">Sessions Today</div>
+                  <div className="stat-value text-secondary">{dashboardStats?.sessions_today || 0}</div>
+                  <div className="stat-desc">Learning sessions</div>
+                </div>
+
+                <div className="stat bg-base-100 shadow-xl rounded-lg">
+                  <div className="stat-figure text-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="stat-title">Class Accuracy</div>
+                  <div className="stat-value text-success">{dashboardStats?.class_accuracy || 0}%</div>
+                  <div className="stat-desc">Overall correct answers</div>
+                </div>
+
+                <div className="stat bg-base-100 shadow-xl rounded-lg">
+                  <div className="stat-figure text-warning">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <div className="stat-title">Needs Help</div>
+                  <div className="stat-value text-warning">{dashboardStats?.students_needing_help || 0}</div>
+                  <div className="stat-desc">Students struggling</div>
+                </div>
+              </div>
+
+              {/* Student Performance Table */}
+              <div className="card bg-base-100 shadow-xl">
+                <div className="card-body">
+                  <h2 className="card-title text-2xl mb-4">Student Performance</h2>
+
+                  {dashboardStudents.length === 0 ? (
+                    <p className="text-gray-500 italic">No student data yet. Students will appear here once they start learning.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table table-zebra w-full">
+                        <thead>
+                          <tr>
+                            <th>Student</th>
+                            <th>Sessions</th>
+                            <th>Accuracy</th>
+                            <th>Last Active</th>
+                            <th>Status</th>
+                            <th>AI Insights</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dashboardStudents.map((student) => (
+                            <tr key={student.student_id}>
+                              <td>
+                                <div>
+                                  <div className="font-bold">{student.full_name}</div>
+                                  <div className="text-sm opacity-50">@{student.username}</div>
+                                </div>
+                              </td>
+                              <td>{student.total_sessions}</td>
+                              <td>
+                                <div className="flex items-center gap-2">
+                                  <progress
+                                    className={`progress w-20 ${
+                                      student.accuracy_percent >= 70 ? 'progress-success' :
+                                      student.accuracy_percent >= 50 ? 'progress-warning' :
+                                      'progress-error'
+                                    }`}
+                                    value={student.accuracy_percent}
+                                    max="100"
+                                  ></progress>
+                                  <span className="text-sm">{student.accuracy_percent}%</span>
+                                </div>
+                              </td>
+                              <td>{student.last_active ? new Date(student.last_active).toLocaleString() : 'Never'}</td>
+                              <td>
+                                <span className={`badge ${
+                                  student.status === 'good' ? 'badge-success' :
+                                  student.status === 'warning' ? 'badge-warning' :
+                                  'badge-error'
+                                }`}>
+                                  {student.status === 'good' ? 'Good' :
+                                   student.status === 'warning' ? 'Fair' :
+                                   'Needs Help'}
+                                </span>
+                              </td>
+                              <td>
+                                <button
+                                  className={`btn btn-sm btn-primary ${
+                                    aiInsightsLoading && selectedStudentForInsights === student.student_id ? 'loading' : ''
+                                  }`}
+                                  onClick={() => fetchAIInsights(student.student_id)}
+                                  disabled={aiInsightsLoading}
+                                >
+                                  {aiInsightsLoading && selectedStudentForInsights === student.student_id ? '' : 'Get Insights'}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* AI Insights Panel */}
+              {(aiInsights || aiInsightsLoading) && (
+                <div className="card bg-base-100 shadow-xl border-2 border-primary">
+                  <div className="card-body">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="card-title text-2xl">
+                        AI Insights {aiInsights && `for ${aiInsights.student.full_name}`}
+                      </h2>
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        onClick={() => {
+                          setAiInsights(null);
+                          setSelectedStudentForInsights(null);
+                        }}
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    {aiInsightsLoading ? (
+                      <div className="flex flex-col items-center justify-center py-8">
+                        <span className="loading loading-spinner loading-lg text-primary"></span>
+                        <p className="mt-4 text-gray-500">Analyzing student data with AI...</p>
+                      </div>
+                    ) : aiInsights ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="stat bg-base-200 rounded-lg">
+                          <div className="stat-title">Performance Summary</div>
+                          <div className="stat-value text-lg">
+                            {aiInsights.stats.accuracy_percent}% Accuracy
+                          </div>
+                          <div className="stat-desc">
+                            {aiInsights.stats.total_answers - aiInsights.stats.wrong_answers} correct / {aiInsights.stats.total_answers} total
+                          </div>
+                        </div>
+
+                        <div className="stat bg-primary text-primary-content rounded-lg">
+                          <div className="stat-title text-primary-content/70">Suggested Focus</div>
+                          <div className="stat-value text-lg">{aiInsights.insights.suggested_focus}</div>
+                          <div className="stat-desc text-primary-content/70">Priority area</div>
+                        </div>
+
+                        <div className="card bg-error/10 border border-error/20">
+                          <div className="card-body p-4">
+                            <h3 className="font-bold text-error">Areas of Struggle</h3>
+                            <p className="text-sm">{aiInsights.insights.struggles}</p>
+                          </div>
+                        </div>
+
+                        <div className="card bg-success/10 border border-success/20">
+                          <div className="card-body p-4">
+                            <h3 className="font-bold text-success">Strengths</h3>
+                            <p className="text-sm">{aiInsights.insights.strengths}</p>
+                          </div>
+                        </div>
+
+                        <div className="card bg-info/10 border border-info/20 md:col-span-2">
+                          <div className="card-body p-4">
+                            <h3 className="font-bold text-info">Recommendations</h3>
+                            {Array.isArray(aiInsights.insights.recommendations) ? (
+                              <ul className="list-disc list-inside text-sm space-y-1">
+                                {aiInsights.insights.recommendations.map((rec, idx) => (
+                                  <li key={idx}>{rec}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-sm whitespace-pre-wrap">{aiInsights.insights.recommendations}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
 
       {/* Files Tab Content */}
       {activeTab === 'files' && (

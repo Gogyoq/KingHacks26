@@ -1137,3 +1137,286 @@ async def get_ended_conversations(current_user: User = Depends(get_current_user)
         return {"conversations": conversations, "count": len(conversations)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== TEACHER DASHBOARD ENDPOINTS =====
+
+@router.get("/dashboard/stats")
+async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
+    """
+    Get class-wide statistics for the teacher dashboard.
+    Returns: active students, sessions today, class accuracy, students needing help.
+    """
+    if current_user.account_type != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view dashboard")
+
+    try:
+        # Get total active students (students with at least one conversation)
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(DISTINCT student_id) as count FROM student_conversations")
+        active_students = c.fetchone()['count']
+
+        # Get sessions today
+        c.execute("""
+            SELECT COUNT(*) as count FROM student_conversations
+            WHERE DATE(started_at) = DATE('now')
+        """)
+        sessions_today = c.fetchone()['count']
+
+        # Calculate class-wide accuracy
+        c.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN is_wrong = 1 THEN 1 ELSE 0 END) as wrong
+            FROM conversation_messages
+            WHERE role = 'user'
+        """)
+        accuracy_row = c.fetchone()
+        total_answers = accuracy_row['total'] or 0
+        wrong_answers = accuracy_row['wrong'] or 0
+        correct_answers = total_answers - wrong_answers
+        class_accuracy = round((correct_answers / total_answers * 100), 1) if total_answers > 0 else 0
+
+        # Students needing help (accuracy < 60% or has_wrong_answers in recent session)
+        c.execute("""
+            SELECT COUNT(DISTINCT sc.student_id) as count
+            FROM student_conversations sc
+            WHERE sc.has_wrong_answers = 1
+            AND DATE(sc.last_message_at) >= DATE('now', '-7 days')
+        """)
+        students_needing_help = c.fetchone()['count']
+
+        conn.close()
+
+        return {
+            "active_students": active_students,
+            "sessions_today": sessions_today,
+            "class_accuracy": class_accuracy,
+            "students_needing_help": students_needing_help
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dashboard/students")
+async def get_dashboard_students(current_user: User = Depends(get_current_user)):
+    """
+    Get per-student performance summary for the dashboard.
+    Returns: student info, total sessions, accuracy %, last active, status.
+    """
+    if current_user.account_type != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view dashboard")
+
+    try:
+        # Get all students with conversations
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        # Get student performance data
+        c.execute("""
+            SELECT
+                sc.student_id,
+                COUNT(DISTINCT sc.id) as total_sessions,
+                MAX(sc.last_message_at) as last_active,
+                COUNT(cm.id) as total_answers,
+                SUM(CASE WHEN cm.is_wrong = 1 THEN 1 ELSE 0 END) as wrong_answers
+            FROM student_conversations sc
+            LEFT JOIN conversation_messages cm ON sc.id = cm.conversation_id AND cm.role = 'user'
+            GROUP BY sc.student_id
+            ORDER BY last_active DESC
+        """)
+        student_data = c.fetchall()
+        conn.close()
+
+        # Get student info from accounts DB
+        accounts_conn = sqlite3.connect(ACCOUNTS_DB_PATH)
+        accounts_conn.row_factory = sqlite3.Row
+        ac = accounts_conn.cursor()
+
+        students = []
+        for row in student_data:
+            ac.execute(
+                "SELECT username, full_name FROM accounts WHERE id = ?",
+                (row['student_id'],)
+            )
+            account = ac.fetchone()
+
+            total = row['total_answers'] or 0
+            wrong = row['wrong_answers'] or 0
+            correct = total - wrong
+            accuracy = round((correct / total * 100), 1) if total > 0 else 0
+
+            # Determine status: green (>= 70%), yellow (50-69%), red (< 50%)
+            if accuracy >= 70:
+                status = "good"
+            elif accuracy >= 50:
+                status = "warning"
+            else:
+                status = "needs_help"
+
+            students.append({
+                "student_id": row['student_id'],
+                "username": account['username'] if account else 'Unknown',
+                "full_name": account['full_name'] if account else 'Unknown',
+                "total_sessions": row['total_sessions'],
+                "accuracy_percent": accuracy,
+                "last_active": row['last_active'],
+                "status": status
+            })
+
+        accounts_conn.close()
+
+        return {"students": students}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dashboard/student/{student_id}/ai-insights")
+async def get_student_ai_insights(student_id: int, current_user: User = Depends(get_current_user)):
+    """
+    Get AI-powered insights for a specific student using Backboard.
+    Analyzes the student's conversation history and generates recommendations.
+    """
+    if current_user.account_type != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view AI insights")
+
+    try:
+        # Get student info
+        accounts_conn = sqlite3.connect(ACCOUNTS_DB_PATH)
+        accounts_conn.row_factory = sqlite3.Row
+        ac = accounts_conn.cursor()
+        ac.execute("SELECT username, full_name, assistant_id FROM accounts WHERE id = ?", (student_id,))
+        student = ac.fetchone()
+        accounts_conn.close()
+
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+        # Get student's recent conversation messages (last 20 exchanges)
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT cm.role, cm.content, cm.is_wrong, cm.difficulty
+            FROM conversation_messages cm
+            JOIN student_conversations sc ON cm.conversation_id = sc.id
+            WHERE sc.student_id = ?
+            ORDER BY cm.created_at DESC
+            LIMIT 40
+        """, (student_id,))
+        messages = c.fetchall()
+
+        # Get performance stats
+        c.execute("""
+            SELECT
+                COUNT(cm.id) as total_answers,
+                SUM(CASE WHEN cm.is_wrong = 1 THEN 1 ELSE 0 END) as wrong_answers
+            FROM conversation_messages cm
+            JOIN student_conversations sc ON cm.conversation_id = sc.id
+            WHERE sc.student_id = ? AND cm.role = 'user'
+        """, (student_id,))
+        stats = c.fetchone()
+        conn.close()
+
+        total = stats['total_answers'] or 0
+        wrong = stats['wrong_answers'] or 0
+        accuracy = round(((total - wrong) / total * 100), 1) if total > 0 else 0
+
+        # Format conversation history for AI analysis
+        conversation_summary = []
+        for msg in reversed(messages):
+            role_label = "Student" if msg['role'] == 'user' else "Tutor"
+            wrong_marker = " [INCORRECT]" if msg['is_wrong'] else ""
+            difficulty_marker = f" (difficulty: {msg['difficulty']})" if msg['difficulty'] else ""
+            conversation_summary.append(f"{role_label}{wrong_marker}{difficulty_marker}: {msg['content'][:200]}")
+
+        conversation_text = "\n".join(conversation_summary[-20:])  # Last 20 messages
+
+        # Use Backboard to analyze and generate insights
+        analysis_prompt = f"""You are an educational analyst helping a teacher understand a student's learning progress.
+
+Student: {student['full_name']} ({student['username']})
+Overall Accuracy: {accuracy}%
+Total Questions Answered: {total}
+Wrong Answers: {wrong}
+
+Recent conversation history:
+{conversation_text}
+
+Based on this data, provide a concise analysis in this exact JSON format:
+{{
+    "struggles": "Brief description of what topics/concepts the student is struggling with (1-2 sentences)",
+    "strengths": "What the student is doing well (1 sentence)",
+    "recommendations": "Specific actionable recommendations for the teacher (2-3 bullet points)",
+    "suggested_focus": "One specific topic or skill to focus on next"
+}}
+
+Be specific and actionable. Reference actual patterns you see in the conversation."""
+
+        # Call Backboard API to get AI insights
+        from backboard import BackboardClient
+        import os
+        client = BackboardClient(os.getenv("BACKBOARD_API_KEY"))
+
+        # Create a temporary thread for analysis using student's assistant
+        thread = await client.create_thread(student['assistant_id'])
+
+        # Get AI response
+        full_response = ""
+        response_stream = await client.add_message(
+            thread_id=str(thread.thread_id),
+            content=analysis_prompt,
+            llm_provider="openai",
+            model_name="gpt-4o",
+            stream=True
+        )
+        async for chunk in response_stream:
+            if chunk.get('type') == 'content_streaming' and chunk.get('content'):
+                full_response += chunk['content']
+            elif chunk.get('type') == 'message_complete':
+                break
+
+        # Parse AI response
+        import json
+        try:
+            # Try to extract JSON from response
+            json_start = full_response.find('{')
+            json_end = full_response.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                insights = json.loads(full_response[json_start:json_end])
+            else:
+                insights = json.loads(full_response)
+        except json.JSONDecodeError:
+            # Fallback if JSON parsing fails
+            insights = {
+                "struggles": "Unable to analyze - insufficient data",
+                "strengths": "Student is actively engaging with lessons",
+                "recommendations": ["Continue monitoring progress", "Review recent wrong answers"],
+                "suggested_focus": "Practice with current difficulty level"
+            }
+
+        return {
+            "student": {
+                "id": student_id,
+                "username": student['username'],
+                "full_name": student['full_name']
+            },
+            "stats": {
+                "total_answers": total,
+                "wrong_answers": wrong,
+                "accuracy_percent": accuracy
+            },
+            "insights": insights
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
