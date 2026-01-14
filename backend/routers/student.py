@@ -83,13 +83,31 @@ CRITICAL RULES - FOLLOW EXACTLY:
 5. Stay STRICTLY within the scope of what the teacher uploaded
 6. Create a short, engaging story (2-3 paragraphs) that teaches concepts FROM THE MATERIALS ONLY
 7. Ask exactly ONE clear question using ONLY concepts and operations from the teaching materials
-8. Adjust difficulty within the material's scope BUT never add new concepts
+8. STRICTLY follow the difficulty level provided - do NOT jump ahead
 
-ADAPTIVE DIFFICULTY (within the same topic ONLY):
-- "easy": Basic problems from early sections of the materials (e.g., single-digit subtraction if materials teach subtraction)
-- "medium": Intermediate problems from middle sections (e.g., two-digit subtraction if materials teach that)
-- "hard": Advanced problems from later sections (e.g., regrouping if materials teach that)
-- NEVER add operations or concepts not explicitly taught in the materials
+ADAPTIVE DIFFICULTY RULES (MUST FOLLOW):
+The system will tell you what difficulty to use. Follow these guidelines for each level:
+
+"easy" - Basic single-digit problems ONLY:
+  - Subtraction: numbers 1-10 only (e.g., 9-3, 7-2, 10-4)
+  - Simple word problems with small numbers
+  - Example: "5 birds - 2 birds = ?"
+
+"medium" - Two-digit problems WITHOUT regrouping:
+  - Subtraction: numbers up to 20 (e.g., 15-8, 17-9, 20-12)
+  - May include larger numbers where ones digit doesn't require borrowing
+  - Example: "47-23 = ?" (no borrowing needed)
+
+"hard" - Two-digit problems WITH regrouping/borrowing:
+  - Subtraction requiring borrowing (e.g., 52-27, 64-38)
+  - Multi-step problems within the material's scope
+  - Example: "A library has 75 books. Students borrow 48. How many left?"
+
+STRICT DIFFICULTY BOUNDARIES:
+- If told "easy", NEVER use numbers above 10
+- If told "medium", NEVER require regrouping/borrowing
+- If told "hard", you MAY use regrouping but stay within material scope
+- NEVER jump from easy to hard - progression must be gradual
 
 QUESTION STYLE ADAPTATION:
 - If a student struggles with a format, give MORE practice with that exact format
@@ -107,11 +125,38 @@ Your response will be parsed as JSON with these fields:
 - story: The narrative text using ONLY concepts from teaching materials
 - question: A question testing ONLY what's explicitly in the materials
 - expected_answer: The correct answer (just the value)
-- difficulty: "easy", "medium", or "hard" (within material's scope)
+- difficulty: "easy", "medium", or "hard" (USE THE DIFFICULTY YOU WERE TOLD)
 - hint: A helpful clue referencing the materials"""
 
 # Store the expected answer per thread for validation
 thread_expected_answers = {}
+
+def calculate_next_difficulty(current_difficulty: str, stats: dict) -> str:
+    """
+    Calculate the next difficulty based on student performance.
+
+    Rules:
+    - Start at "easy"
+    - After 3 correct answers in a row at current difficulty: increase difficulty
+    - After 2 wrong answers in a row: decrease difficulty
+    - Never skip levels (easy -> medium -> hard, not easy -> hard)
+    """
+    difficulty_order = ['easy', 'medium', 'hard']
+    current_idx = difficulty_order.index(current_difficulty) if current_difficulty in difficulty_order else 0
+
+    correct_streak = stats.get('recent_correct_streak', 0)
+    wrong_streak = stats.get('recent_wrong_streak', 0)
+
+    # Increase difficulty after 3 correct in a row
+    if correct_streak >= 3 and current_idx < len(difficulty_order) - 1:
+        return difficulty_order[current_idx + 1]
+
+    # Decrease difficulty after 2 wrong in a row
+    if wrong_streak >= 2 and current_idx > 0:
+        return difficulty_order[current_idx - 1]
+
+    # Stay at current difficulty
+    return current_difficulty
 
 def save_message_to_conversation(conversation_id: int, role: str, content: str, is_wrong: bool = False, difficulty: str = None):
     """Save a message to the conversation_messages table."""
@@ -546,19 +591,51 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                     # Answer is correct - generate new story
                     last_difficulty = stored_data.get('difficulty', 'easy') if stored_data else 'easy'
 
+                    # Check for difficulty override (from multiple wrong answers)
+                    difficulty_override = stored_data.get('next_difficulty_override') if stored_data else None
+
+                    # Get performance stats and calculate next difficulty
+                    stats = get_performance_stats(conversation_id) if conversation_id else {}
+                    if difficulty_override:
+                        next_difficulty = difficulty_override
+                        print(f"Using difficulty override: {next_difficulty} (was {last_difficulty})")
+                        # Clear the override after using it
+                        if stored_data:
+                            stored_data.pop('next_difficulty_override', None)
+                    else:
+                        next_difficulty = calculate_next_difficulty(last_difficulty, stats)
+                        print(f"Calculated next difficulty: {next_difficulty} (was {last_difficulty}, streak: {stats.get('recent_correct_streak', 0)} correct, {stats.get('recent_wrong_streak', 0)} wrong)")
+
+                    # Build performance context for the AI
+                    perf_context = f"""
+STUDENT PERFORMANCE (use this to adjust teaching):
+- Total answers: {stats.get('total_answers', 0)}
+- Correct: {stats.get('correct_count', 0)} | Wrong: {stats.get('wrong_count', 0)}
+- Accuracy: {stats.get('accuracy', 0):.0f}%
+- Recent correct streak: {stats.get('recent_correct_streak', 0)}
+- Recent wrong streak: {stats.get('recent_wrong_streak', 0)}
+
+REQUIRED DIFFICULTY FOR NEXT QUESTION: {next_difficulty}
+(Previous was: {last_difficulty})
+"""
+
                     continuation_prompt = f"""Great job! The student answered correctly with: {request.message}
 
 {SYSTEM_PROMPT}
 {teacher_instructions}
+{perf_context}
 
-The last question was "{last_difficulty}" difficulty. Consider increasing difficulty if appropriate BUT stay within the material's scope.
+YOU MUST USE DIFFICULTY: "{next_difficulty}"
+- If "{next_difficulty}" is "easy": Use ONLY numbers 1-10
+- If "{next_difficulty}" is "medium": Use numbers up to 20, no regrouping needed
+- If "{next_difficulty}" is "hard": May use regrouping/borrowing
 
 REMINDER: Only use concepts and operations explicitly taught in the materials. Do NOT introduce division, multiplication, fractions, or any other operations not covered.
 
-Congratulate them briefly, then continue with a NEW story and a NEW question using ONLY concepts from the teaching materials.
+Congratulate them briefly, then continue with a NEW story and a NEW question at {next_difficulty} difficulty using ONLY concepts from the teaching materials.
 
 IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other text):
-{{"story": "your story here", "question": "your question here", "expected_answer": "the answer", "difficulty": "easy/medium/hard", "hint": "a helpful hint"}}"""
+{{"story": "your story here", "question": "your question here", "expected_answer": "the answer", "difficulty": "{next_difficulty}", "hint": "a helpful hint"}}"""
 
                     # Collect full response
                     full_response = ""
@@ -615,7 +692,18 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                     question = stored_data.get('question', 'Try the question again.')
                     current_difficulty = stored_data.get('difficulty', 'easy')
 
-                    display_text = f"Not quite! 🤔\n\n**Hint:** {hint}\n\n**Try again:** {question}"
+                    # Check if we should drop difficulty after multiple wrong answers
+                    stats = get_performance_stats(conversation_id) if conversation_id else {}
+                    wrong_streak = stats.get('recent_wrong_streak', 0) + 1  # +1 for current wrong answer
+
+                    if wrong_streak >= 2 and current_difficulty != 'easy':
+                        # Drop difficulty and generate an easier question
+                        new_difficulty = 'easy' if current_difficulty == 'medium' else 'medium'
+                        display_text = f"Let's try something a bit easier! 🌟\n\n**Hint:** {hint}\n\nI'll give you a simpler problem next time. **Try again:** {question}"
+                        # Update the stored difficulty for next question
+                        thread_expected_answers[current_thread_id]['next_difficulty_override'] = new_difficulty
+                    else:
+                        display_text = f"Not quite! 🤔\n\n**Hint:** {hint}\n\n**Try again:** {question}"
 
                     # Mark the user message as wrong
                     if conversation_id:
