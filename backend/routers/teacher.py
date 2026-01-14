@@ -1240,10 +1240,14 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
         students = []
         for row in student_data:
             ac.execute(
-                "SELECT username, full_name FROM accounts WHERE id = ?",
-                (row['student_id'],)
+                "SELECT username, full_name FROM accounts WHERE id = ? AND account_type = ?",
+                (row['student_id'], 'student')
             )
             account = ac.fetchone()
+
+            # Skip if account not found or not a student
+            if not account:
+                continue
 
             total = row['total_answers'] or 0
             wrong = row['wrong_answers'] or 0
@@ -1260,8 +1264,8 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
 
             students.append({
                 "student_id": row['student_id'],
-                "username": account['username'] if account else 'Unknown',
-                "full_name": account['full_name'] if account else 'Unknown',
+                "username": account['username'],
+                "full_name": account['full_name'],
                 "total_sessions": row['total_sessions'],
                 "accuracy_percent": accuracy,
                 "last_active": row['last_active'],
