@@ -126,6 +126,42 @@ def get_user_by_email(email: str) -> UserInDB | None:
         return None
     return UserInDB(**dict(row))
 
+def get_user_id_from_token(token: str) -> int | None:
+    """Extract user_id from JWT token. Returns None if not authenticated."""
+    if not token:
+        return None
+    try:
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token[7:]
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            return None
+        # Look up user_id from accounts DB (any account type)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id FROM accounts WHERE username = ?", (username,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except JWTError:
+        return None
+
+def get_user_assistant_id(user_id: int) -> str | None:
+    """Fetch the unique assistant_id for a given user from the accounts table."""
+    if not user_id:
+        return None
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT assistant_id FROM accounts WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+
+    return row["assistant_id"] if row and row["assistant_id"] else None
+
 def get_user(username:str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # allows name-based access

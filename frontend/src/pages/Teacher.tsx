@@ -119,7 +119,15 @@ const Teacher: React.FC = () => {
       // Refresh file status for pending files
       for (const file of pendingFiles) {
         try {
-          const response = await axios.get(`http://localhost:8000/teacher/files/${file.id}/backboard-status`);
+          const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+          const response = await axios.get(
+            `http://localhost:8000/teacher/files/${file.id}/backboard-status`,
+            {
+              headers: {
+                ...(token && { 'Authorization': `Bearer ${token}` }),
+              },
+            }
+          );
           if (response.data.status !== file.backboard_status) {
             // Status changed, refresh all files
             await fetchFiles();
@@ -389,9 +397,12 @@ const Teacher: React.FC = () => {
 
     try {
       setUploading(true);
+      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+
       await axios.post('http://localhost:8000/teacher/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+          ...(token && { 'Authorization': `Bearer ${token}` }),
         },
       });
       setSelectedFiles([]);
@@ -519,7 +530,17 @@ const Teacher: React.FC = () => {
   const handleToggleActive = async (fileId: number, isActive: boolean) => {
     try {
       const endpoint = isActive ? 'deactivate' : 'activate';
-      await axios.post(`http://localhost:8000/teacher/files/${fileId}/${endpoint}`);
+      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+
+      await axios.post(
+        `http://localhost:8000/teacher/files/${fileId}/${endpoint}`,
+        {},
+        {
+          headers: {
+            ...(token && { 'Authorization': `Bearer ${token}` }),
+          },
+        }
+      );
       await fetchFiles();
     } catch (err: any) {
       console.error("Failed to toggle file active status", err);

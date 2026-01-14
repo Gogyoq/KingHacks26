@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from backboard import BackboardClient
 import sqlite3
-from .accounts import get_current_user, User, oauth2_scheme, DB_PATH as ACCOUNTS_DB_PATH
+from .accounts import get_current_user, get_user_id_from_token,get_user_assistant_id ,User, oauth2_scheme, DB_PATH as ACCOUNTS_DB_PATH
 from .teacher import get_active_instructions
 from jose import JWTError, jwt
 from typing import Optional
@@ -112,28 +112,6 @@ Your response will be parsed as JSON with these fields:
 
 # Store the expected answer per thread for validation
 thread_expected_answers = {}
-
-def get_user_id_from_token(token: str) -> int | None:
-    """Extract user_id from JWT token. Returns None if not authenticated."""
-    if not token:
-        return None
-    try:
-        # Remove 'Bearer ' prefix if present
-        if token.startswith('Bearer '):
-            token = token[7:]
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            return None
-        # Look up user_id from accounts DB (any account type)
-        conn = sqlite3.connect(ACCOUNTS_DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT id FROM accounts WHERE username = ?", (username,))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
-    except JWTError:
-        return None
 
 def save_message_to_conversation(conversation_id: int, role: str, content: str, is_wrong: bool = False, difficulty: str = None):
     """Save a message to the conversation_messages table."""
@@ -287,20 +265,6 @@ def get_most_recent_conversation_for_lesson(student_id: int, file_id: int) -> di
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
-
-def get_user_assistant_id(user_id: int) -> str | None:
-    """Fetch the unique assistant_id for a given user from the accounts table."""
-    if not user_id:
-        return None
-
-    conn = sqlite3.connect(ACCOUNTS_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT assistant_id FROM accounts WHERE id = ?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-
-    return row["assistant_id"] if row and row["assistant_id"] else None
 
 def normalize_answer(answer: str) -> str:
     """Normalize an answer for comparison (lowercase, strip, handle number words)"""

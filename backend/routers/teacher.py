@@ -1,12 +1,13 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, Header, UploadFile, File, HTTPException, Depends
 from pathlib import Path
 import shutil
 from datetime import datetime
 import sqlite3
 from pydantic import BaseModel
-from .accounts import get_current_user, User, DB_PATH as ACCOUNTS_DB_PATH
+from .accounts import get_current_user, get_user_assistant_id, get_user_id_from_token,User, DB_PATH as ACCOUNTS_DB_PATH
 import httpx
 import os
+from typing import Optional
 from dotenv import load_dotenv
 from utils import convert_document_to_markdown, can_convert
 
@@ -17,7 +18,6 @@ router = APIRouter(prefix="/teacher", tags=["Teacher"])
 # Backboard API configuration
 BACKBOARD_API_KEY = os.getenv("BACKBOARD_API_KEY")
 BACKBOARD_BASE_URL = "https://app.backboard.io/api"
-ASSISTANT_ID = "610acc47-b81b-4234-bda9-8a8a102ebca1"  # Same as in student.py
 
 class CategoryCreate(BaseModel):
     name: str
@@ -34,11 +34,27 @@ UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 @router.post("/upload")
-async def upload_files(files: list[UploadFile] = File(...)):
+async def upload_files(files: list[UploadFile] = File(...), authorization: Optional[str] = Header(None)):
     """
     Upload one or more lesson files.
     Saves files locally AND uploads to Backboard assistant for RAG.
     """
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    user_assistant_id = get_user_assistant_id(user_id) if user_id else None
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Please log in to start your learning adventure!"
+        )
+
+    if not user_assistant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account needs to be set up. Please contact support or re-register."
+        )
+    
     try:
         uploaded_files = []
         conn = sqlite3.connect('chat_history.db')
@@ -65,7 +81,7 @@ async def upload_files(files: list[UploadFile] = File(...)):
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
-                        f"{BACKBOARD_BASE_URL}/assistants/{ASSISTANT_ID}/documents",
+                        f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
                         headers={"X-API-Key": BACKBOARD_API_KEY},
                         files={"file": (file.filename, file_content)},
                         timeout=60.0
@@ -139,12 +155,28 @@ async def list_files():
 
 
 @router.get("/files/{file_id}/backboard-status")
-async def get_backboard_status(file_id: int):
+async def get_backboard_status(file_id: int, authorization: Optional[str] = Header(None)):
     """
     Get the current Backboard processing status for a file.
     Fetches fresh status from Backboard API.
     If status is 'error', automatically converts with LlamaIndex and re-uploads.
     """
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    user_assistant_id = get_user_assistant_id(user_id) if user_id else None
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Please log in to start your learning adventure!"
+        )
+
+    if not user_assistant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account needs to be set up. Please contact support or re-register."
+        )
+
     try:
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
@@ -192,7 +224,7 @@ async def get_backboard_status(file_id: int):
 
                         # Re-upload to Backboard
                         retry_response = await client.post(
-                            f"{BACKBOARD_BASE_URL}/assistants/{ASSISTANT_ID}/documents",
+                            f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
                             headers={"X-API-Key": BACKBOARD_API_KEY},
                             files={"file": (new_filename, md_content, "text/markdown")},
                             timeout=60.0
@@ -254,14 +286,31 @@ async def get_backboard_status(file_id: int):
 
 
 @router.get("/backboard/documents")
-async def list_backboard_documents():
+async def list_backboard_documents(authorization: Optional[str] = Header(None)):
     """
     List all documents attached to the Backboard assistant.
     """
+
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    user_assistant_id = get_user_assistant_id(user_id) if user_id else None
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Please log in to start your learning adventure!"
+        )
+
+    if not user_assistant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account needs to be set up. Please contact support or re-register."
+        )
+    
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{BACKBOARD_BASE_URL}/assistants/{ASSISTANT_ID}/documents",
+                f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
                 headers={"X-API-Key": BACKBOARD_API_KEY},
                 timeout=30.0
             )
@@ -281,11 +330,28 @@ async def list_backboard_documents():
 
 
 @router.post("/files/{file_id}/retry-backboard")
-async def retry_backboard_upload(file_id: int):
+async def retry_backboard_upload(file_id: int, authorization: Optional[str] = Header(None)):
     """
     Retry uploading a failed document to Backboard.
     If the original upload failed, converts PDF to markdown and re-uploads.
     """
+
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    user_assistant_id = get_user_assistant_id(user_id) if user_id else None
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Please log in to start your learning adventure!"
+        )
+
+    if not user_assistant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account needs to be set up. Please contact support or re-register."
+        )
+
     try:
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
@@ -328,7 +394,7 @@ async def retry_backboard_upload(file_id: int):
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{BACKBOARD_BASE_URL}/assistants/{ASSISTANT_ID}/documents",
+                    f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
                     headers={"X-API-Key": BACKBOARD_API_KEY},
                     files={"file": (new_filename, md_content, "text/markdown")},
                     timeout=60.0
@@ -563,10 +629,27 @@ async def delete_file(file_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/files/{file_id}/activate")
-async def activate_file(file_id: int):
+async def activate_file(file_id: int, authorization: Optional[str] = Header(None)):
     """
     Mark a file as active for AI context. Uploads to Backboard if not already there.
     """
+
+    user_id = get_user_id_from_token(authorization) if authorization else None
+
+    user_assistant_id = get_user_assistant_id(user_id) if user_id else None
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Please log in to start your learning adventure!"
+        )
+
+    if not user_assistant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account needs to be set up. Please contact support or re-register."
+        )
+    
     try:
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
@@ -601,7 +684,7 @@ async def activate_file(file_id: int):
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
-                        f"{BACKBOARD_BASE_URL}/assistants/{ASSISTANT_ID}/documents",
+                        f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
                         headers={"X-API-Key": BACKBOARD_API_KEY},
                         files={"file": (original_filename, file_content)},
                         timeout=60.0
