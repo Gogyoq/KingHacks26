@@ -1,4 +1,5 @@
 # student.py
+
 import os
 import json
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -7,7 +8,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from backboard import BackboardClient
 import sqlite3
-from .accounts import get_current_user, get_user_id_from_token,get_user_assistant_id ,User, oauth2_scheme, DB_PATH as ACCOUNTS_DB_PATH
+from .accounts import get_current_user, get_user_id_from_token, get_user_assistant_id, User, oauth2_scheme, DB_PATH as ACCOUNTS_DB_PATH
 from .teacher import get_active_instructions
 from jose import JWTError, jwt
 from typing import Optional
@@ -22,7 +23,6 @@ SECRET_KEY = "07491e256c50c40b71a9ddc14d90e0dd438d8863fe00ae90abc3b72878bb0741"
 ALGORITHM = "HS256"
 
 # ===== STRUCTURED OUTPUT MODELS =====
-
 class StoryResponse(BaseModel):
     """Structured response for story generation"""
     story: str  # The narrative/story text
@@ -31,11 +31,13 @@ class StoryResponse(BaseModel):
     difficulty: str  # "easy", "medium", "hard"
     hint: str  # A hint to give if the student gets it wrong
 
+
 class FeedbackResponse(BaseModel):
     """Structured response for feedback after wrong answer"""
     encouragement: str  # Encouraging message
     hint: str  # Hint without giving away the answer
     question_repeated: str  # The same question asked again
+
 
 # JSON schemas for Backboard response_format
 STORY_RESPONSE_FORMAT = {
@@ -63,7 +65,7 @@ class ChatRequest(BaseModel):
     file_id: int | None = None  # Lesson/File ID for lesson-specific chats
     message: str
 
-#Load .env file
+# Load .env file
 load_dotenv()
 
 # Initialize Backboard Client
@@ -113,6 +115,7 @@ Your response will be parsed as JSON with these fields:
 # Store the expected answer per thread for validation
 thread_expected_answers = {}
 
+
 def save_message_to_conversation(conversation_id: int, role: str, content: str, is_wrong: bool = False, difficulty: str = None):
     """Save a message to the conversation_messages table."""
     try:
@@ -122,31 +125,35 @@ def save_message_to_conversation(conversation_id: int, role: str, content: str, 
             "INSERT INTO conversation_messages (conversation_id, role, content, is_wrong, difficulty) VALUES (?, ?, ?, ?, ?)",
             (conversation_id, role, content, 1 if is_wrong else 0, difficulty)
         )
+        
         # Update last_message_at timestamp
         c.execute(
             "UPDATE student_conversations SET last_message_at = CURRENT_TIMESTAMP WHERE id = ?",
             (conversation_id,)
         )
+        
         # If wrong answer, update has_wrong_answers flag
         if is_wrong:
             c.execute(
                 "UPDATE student_conversations SET has_wrong_answers = 1 WHERE id = ?",
                 (conversation_id,)
             )
+        
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"Error saving message to conversation: {e}")
+
 
 def get_performance_stats(conversation_id: int) -> dict:
     """Get performance statistics for a conversation to inform difficulty adjustment."""
     try:
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
-
+        
         # Get counts of correct/wrong answers
         c.execute("""
-            SELECT
+            SELECT 
                 COUNT(*) as total_answers,
                 SUM(CASE WHEN is_wrong = 1 THEN 1 ELSE 0 END) as wrong_count,
                 SUM(CASE WHEN is_wrong = 0 THEN 1 ELSE 0 END) as correct_count
@@ -154,7 +161,7 @@ def get_performance_stats(conversation_id: int) -> dict:
             WHERE conversation_id = ? AND role = 'user'
         """, (conversation_id,))
         row = c.fetchone()
-
+        
         # Get recent performance (last 5 answers)
         c.execute("""
             SELECT is_wrong, difficulty FROM conversation_messages
@@ -162,7 +169,7 @@ def get_performance_stats(conversation_id: int) -> dict:
             ORDER BY id DESC LIMIT 5
         """, (conversation_id,))
         recent = c.fetchall()
-
+        
         # Get difficulty distribution
         c.execute("""
             SELECT difficulty, COUNT(*) as count
@@ -171,13 +178,13 @@ def get_performance_stats(conversation_id: int) -> dict:
             GROUP BY difficulty
         """, (conversation_id,))
         difficulty_dist = {r[0]: r[1] for r in c.fetchall()}
-
+        
         conn.close()
-
+        
         total = row[0] or 0
         wrong = row[1] or 0
         correct = row[2] or 0
-
+        
         # Calculate recent streak
         recent_correct_streak = 0
         recent_wrong_streak = 0
@@ -191,7 +198,7 @@ def get_performance_stats(conversation_id: int) -> dict:
                 recent_wrong_streak += 1
             else:
                 break
-
+        
         return {
             'total_answers': total,
             'correct_count': correct,
@@ -213,6 +220,7 @@ def get_performance_stats(conversation_id: int) -> dict:
             'difficulty_distribution': {}
         }
 
+
 def create_conversation(student_id: int, thread_id: str, file_id: int | None = None) -> int:
     """Create a new conversation for a student and return its ID."""
     conn = sqlite3.connect('chat_history.db')
@@ -226,6 +234,7 @@ def create_conversation(student_id: int, thread_id: str, file_id: int | None = N
     conn.close()
     return conversation_id
 
+
 def get_conversation_by_id(conversation_id: int) -> dict | None:
     """Get conversation details by ID."""
     conn = sqlite3.connect('chat_history.db')
@@ -236,13 +245,14 @@ def get_conversation_by_id(conversation_id: int) -> dict | None:
     conn.close()
     return dict(row) if row else None
 
+
 def get_active_conversation_for_lesson(student_id: int, file_id: int) -> dict | None:
     """Get the most recent active (not ended) conversation for a student and lesson."""
     conn = sqlite3.connect('chat_history.db')
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""
-        SELECT * FROM student_conversations 
+        SELECT * FROM student_conversations
         WHERE student_id = ? AND file_id = ? AND ended_at IS NULL
         ORDER BY last_message_at DESC
         LIMIT 1
@@ -251,13 +261,14 @@ def get_active_conversation_for_lesson(student_id: int, file_id: int) -> dict | 
     conn.close()
     return dict(row) if row else None
 
+
 def get_most_recent_conversation_for_lesson(student_id: int, file_id: int) -> dict | None:
     """Get the most recent conversation (including ended ones) for a student and lesson."""
     conn = sqlite3.connect('chat_history.db')
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""
-        SELECT * FROM student_conversations 
+        SELECT * FROM student_conversations
         WHERE student_id = ? AND file_id = ?
         ORDER BY last_message_at DESC
         LIMIT 1
@@ -266,9 +277,11 @@ def get_most_recent_conversation_for_lesson(student_id: int, file_id: int) -> di
     conn.close()
     return dict(row) if row else None
 
+
 def normalize_answer(answer: str) -> str:
     """Normalize an answer for comparison (lowercase, strip, handle number words)"""
     answer = answer.lower().strip()
+    
     # Common number words to digits
     word_to_num = {
         'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
@@ -277,64 +290,86 @@ def normalize_answer(answer: str) -> str:
         'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
         'eighteen': '18', 'nineteen': '19', 'twenty': '20'
     }
+    
     if answer in word_to_num:
         return word_to_num[answer]
+    
     # Remove common extra characters
     answer = answer.replace('$', '').replace('%', '').replace(',', '')
     return answer
+
 
 def check_answer(student_answer: str, expected_answer: str) -> bool:
     """Check if student's answer matches expected answer"""
     student_norm = normalize_answer(student_answer)
     expected_norm = normalize_answer(expected_answer)
-
+    
     # Direct match
     if student_norm == expected_norm:
         return True
-
+    
     # Try numeric comparison (handles "12" vs "12.0")
     try:
         return float(student_norm) == float(expected_norm)
     except ValueError:
         pass
-
+    
     # Check if expected is contained in student answer (e.g., "The answer is 12" contains "12")
     if expected_norm in student_norm:
         return True
-
+    
     return False
 
+
 async def auto_sync_lessons_to_student(student_id: int, student_assistant_id: str):
-    """Automatically sync all active lessons to the student's assistant on first chat"""
+    """Automatically sync all active lessons from enrolled classrooms to the student's assistant on first chat"""
     try:
-        # Get all active files
+        # Get classrooms the student is enrolled in
+        from .classroom import DB_PATH as CLASSROOM_DB_PATH
+        classroom_conn = sqlite3.connect(CLASSROOM_DB_PATH)
+        classroom_c = classroom_conn.cursor()
+        classroom_c.execute("""
+            SELECT classroom_id FROM classroom_students WHERE student_id = ?
+        """, (student_id,))
+        enrolled_classroom_ids = [row[0] for row in classroom_c.fetchall()]
+        classroom_conn.close()
+        
+        if not enrolled_classroom_ids:
+            print(f"Student {student_id} not enrolled in any classrooms")
+            return
+        
+        # Get all active files from enrolled classrooms
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        c.execute("""
+        
+        classroom_ids_str = ','.join('?' * len(enrolled_classroom_ids))
+        c.execute(f"""
             SELECT f.id, f.file_path, f.original_filename
             FROM files f
-            WHERE f.is_active = 1 AND f.backboard_status = 'indexed'
-            AND NOT EXISTS (
-                SELECT 1 FROM student_lessons sl
-                WHERE sl.student_id = ? AND sl.file_id = f.id
-            )
-        """, (student_id,))
+            WHERE f.is_active = 1 
+              AND f.backboard_status = 'indexed'
+              AND f.classroom_id IN ({classroom_ids_str})
+              AND NOT EXISTS (
+                  SELECT 1 FROM student_lessons sl
+                  WHERE sl.student_id = ? AND sl.file_id = f.id
+              )
+        """, (*enrolled_classroom_ids, student_id))
+        
         files = c.fetchall()
-
         print(f"Found {len(files)} lessons to sync for student {student_id}")
-
+        
         # Upload each file to student's assistant
         for file_row in files:
             file_path = Path(file_row["file_path"])
             if not file_path.exists():
                 print(f"File not found: {file_path}")
                 continue
-
+            
             # Read file content
             with open(file_path, "rb") as f:
                 file_content = f.read()
-
+            
             # Upload to Backboard
             try:
                 async with httpx.AsyncClient() as http_client:
@@ -344,10 +379,11 @@ async def auto_sync_lessons_to_student(student_id: int, student_assistant_id: st
                         files={"file": (file_row["original_filename"], file_content)},
                         timeout=60.0
                     )
+                    
                     if response.status_code == 200:
                         doc_data = response.json()
                         backboard_doc_id = doc_data.get("document_id")
-
+                        
                         # Record in database
                         c.execute("""
                             INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
@@ -358,37 +394,37 @@ async def auto_sync_lessons_to_student(student_id: int, student_assistant_id: st
                         print(f"Failed to sync {file_row['original_filename']}: {response.status_code}")
             except Exception as e:
                 print(f"Error syncing {file_row['original_filename']}: {e}")
-
+        
         conn.commit()
         conn.close()
         print(f"Auto-sync complete for student {student_id}")
     except Exception as e:
         print(f"Error in auto_sync_lessons_to_student: {e}")
 
+
 @router.post("/chat")
 async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)):
     # Get user_id from token (works for both students and teachers)
     user_id = get_user_id_from_token(authorization) if authorization else None
-
     user_assistant_id = get_user_assistant_id(user_id) if user_id else None
-
+    
     if not user_id:
         raise HTTPException(
             status_code=401,
             detail="Please log in to start your learning adventure!"
         )
-
+    
     if not user_assistant_id:
         raise HTTPException(
             status_code=400,
             detail="Your account needs to be set up. Please contact support or re-register."
         )
-
+    
     async def generate_stream():
         nonlocal user_id
         conversation_id = request.conversation_id
         is_wrong_answer = False
-
+        
         try:
             # 1. Handle lesson-specific conversation lookup
             if request.file_id:
@@ -399,6 +435,7 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)
                         # Use the provided conversation
                         current_thread_id = conv['thread_id']
                         is_first_message = False
+                        
                         # If conversation is ended, create a new one
                         if conv.get('ended_at'):
                             conversation_id = None
@@ -430,37 +467,38 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)
                 # No file_id provided, use existing thread_id/conversation_id
                 current_thread_id = request.thread_id
                 is_first_message = False
-
+            
             # 2. Create a new thread if one doesn't exist
             if not current_thread_id:
                 print("Creating new thread...")
                 thread = await client.create_thread(user_assistant_id)
                 current_thread_id = str(thread.thread_id)
                 is_first_message = True
-
+                
                 # Create conversation record if user is logged in
                 if user_id:
                     conversation_id = create_conversation(user_id, current_thread_id, request.file_id)
-
-                # AUTO-SYNC ALL ACTIVE LESSONS TO STUDENT'S ASSISTANT
-                print(f"Auto-syncing active lessons to student {user_id}'s assistant...")
-                await auto_sync_lessons_to_student(user_id, user_assistant_id)
-
-                # Send thread_id and conversation_id first
-                yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': current_thread_id, 'conversation_id': conversation_id})}\n\n"
-
+                    
+                    # AUTO-SYNC ALL ACTIVE LESSONS FROM ENROLLED CLASSROOMS TO STUDENT'S ASSISTANT
+                    print(f"Auto-syncing active lessons to student {user_id}'s assistant...")
+                    await auto_sync_lessons_to_student(user_id, user_assistant_id)
+            
+            # Send thread_id and conversation_id first
+            yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': current_thread_id, 'conversation_id': conversation_id})}\n\n"
+            
             print(f"Student message to thread {current_thread_id}: {request.message}")
-
+            
             # Save user message to conversation if we have one
             if conversation_id:
                 save_message_to_conversation(conversation_id, 'user', request.message, is_wrong=False)
-
+            
             # Get teacher's custom instructions
             teacher_instructions = get_active_instructions()
-
+            
             # 2. If this is the first message, generate a new story with structured output
             if is_first_message:
                 initial_prompt = f"""{SYSTEM_PROMPT}
+
 {teacher_instructions}
 
 The student wants to learn about: {request.message}
@@ -471,7 +509,7 @@ REMINDER: Only use concepts and operations explicitly taught in the uploaded mat
 
 IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other text):
 {{"story": "your story here", "question": "your question here", "expected_answer": "the answer", "difficulty": "easy", "hint": "a helpful hint"}}"""
-
+                
                 # Collect full response (no streaming for JSON)
                 full_response = ""
                 response_stream = await client.add_message(
@@ -481,12 +519,13 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                     model_name="gpt-4o",
                     stream=True
                 )
+                
                 async for chunk in response_stream:
                     if chunk.get('type') == 'content_streaming' and chunk.get('content'):
                         full_response += chunk['content']
                     elif chunk.get('type') == 'message_complete':
                         break
-
+                
                 # Parse the JSON response
                 try:
                     # Try to extract JSON from the response (in case there's extra text)
@@ -497,6 +536,7 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                         story_data = json.loads(json_str)
                     else:
                         story_data = json.loads(full_response)
+                    
                     story_response = StoryResponse(**story_data)
                 except json.JSONDecodeError as e:
                     print(f"JSON parse error: {e}")
@@ -509,7 +549,7 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                         difficulty="easy",
                         hint="Think about the story!"
                     )
-
+                
                 # Store expected answer for this thread
                 thread_expected_answers[current_thread_id] = {
                     'expected_answer': story_response.expected_answer,
@@ -517,22 +557,23 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                     'question': story_response.question,
                     'difficulty': story_response.difficulty
                 }
+                
                 print(f"Stored expected answer for thread {current_thread_id}: {story_response.expected_answer} (difficulty: {story_response.difficulty})")
-
+                
                 # Format the response for the student (story + question, NOT the answer)
                 display_text = f"{story_response.story}\n\n{story_response.question}"
-
+                
                 # Stream the display text to the frontend
                 yield f"data: {json.dumps({'type': 'content', 'content': display_text, 'thread_id': str(current_thread_id), 'conversation_id': conversation_id, 'difficulty': story_response.difficulty})}\n\n"
-
+                
                 # Save bot message to conversation WITH difficulty
                 if conversation_id:
                     save_message_to_conversation(conversation_id, 'bot', display_text, is_wrong=False, difficulty=story_response.difficulty)
-
+            
             else:
                 # 3. Validate student's answer using stored expected_answer
                 stored_data = thread_expected_answers.get(current_thread_id)
-
+                
                 if stored_data:
                     expected = stored_data['expected_answer']
                     is_correct = check_answer(request.message, expected)
@@ -541,14 +582,14 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                     # No stored answer, assume correct to continue
                     is_correct = True
                     print("No stored answer found, assuming correct")
-
+                
                 if is_correct:
                     # Answer is correct - generate new story
                     last_difficulty = stored_data.get('difficulty', 'easy') if stored_data else 'easy'
-
                     continuation_prompt = f"""Great job! The student answered correctly with: {request.message}
 
 {SYSTEM_PROMPT}
+
 {teacher_instructions}
 
 The last question was "{last_difficulty}" difficulty. Consider increasing difficulty if appropriate BUT stay within the material's scope.
@@ -559,7 +600,7 @@ Congratulate them briefly, then continue with a NEW story and a NEW question usi
 
 IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other text):
 {{"story": "your story here", "question": "your question here", "expected_answer": "the answer", "difficulty": "easy/medium/hard", "hint": "a helpful hint"}}"""
-
+                    
                     # Collect full response
                     full_response = ""
                     response_stream = await client.add_message(
@@ -569,12 +610,13 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                         model_name="gpt-4o",
                         stream=True
                     )
+                    
                     async for chunk in response_stream:
                         if chunk.get('type') == 'content_streaming' and chunk.get('content'):
                             full_response += chunk['content']
                         elif chunk.get('type') == 'message_complete':
                             break
-
+                    
                     # Parse the JSON response
                     try:
                         json_start = full_response.find('{')
@@ -584,6 +626,7 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                             story_data = json.loads(json_str)
                         else:
                             story_data = json.loads(full_response)
+                        
                         story_response = StoryResponse(**story_data)
                     except json.JSONDecodeError as e:
                         print(f"JSON parse error on continuation: {e}")
@@ -595,7 +638,7 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                             difficulty="easy",
                             hint="Think about it!"
                         )
-
+                    
                     # Store new expected answer with difficulty
                     thread_expected_answers[current_thread_id] = {
                         'expected_answer': story_response.expected_answer,
@@ -603,20 +646,21 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                         'question': story_response.question,
                         'difficulty': story_response.difficulty
                     }
-
+                    
                     print(f"New question difficulty: {story_response.difficulty} (was {last_difficulty})")
+                    
                     display_text = f"Correct! 🎉\n\n{story_response.story}\n\n{story_response.question}"
                     is_wrong_answer = False
-
+                
                 else:
                     # Answer is incorrect - give hint and repeat question
                     is_wrong_answer = True
                     hint = stored_data.get('hint', 'Think about it carefully!')
                     question = stored_data.get('question', 'Try the question again.')
                     current_difficulty = stored_data.get('difficulty', 'easy')
-
+                    
                     display_text = f"Not quite! 🤔\n\n**Hint:** {hint}\n\n**Try again:** {question}"
-
+                    
                     # Mark the user message as wrong
                     if conversation_id:
                         try:
@@ -639,46 +683,47 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                             conn.close()
                         except Exception as e:
                             print(f"Error marking wrong answer: {e}")
-
+                
                 # Get difficulty for saving (from correct branch or wrong branch)
                 save_difficulty = story_response.difficulty if is_correct else current_difficulty
-
+                
                 # Stream the response with difficulty info
                 yield f"data: {json.dumps({'type': 'content', 'content': display_text, 'thread_id': str(current_thread_id), 'conversation_id': conversation_id, 'difficulty': save_difficulty})}\n\n"
-
+                
                 # Save bot message to conversation with difficulty
                 if conversation_id:
                     save_message_to_conversation(conversation_id, 'bot', display_text, is_wrong=False, difficulty=save_difficulty)
-
+            
             # Send done signal
             yield f"data: {json.dumps({'type': 'done', 'thread_id': str(current_thread_id), 'conversation_id': conversation_id, 'was_wrong': is_wrong_answer})}\n\n"
-
+        
         except Exception as e:
             print(f"Error in chat: {str(e)}")
             import traceback
             traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
-
+    
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
 
 @router.get("/conversations")
 async def get_my_conversations(current_user: User = Depends(get_current_user)):
     """Get all conversations for the logged-in student."""
     if current_user.account_type != "student":
         raise HTTPException(status_code=403, detail="Only students can view their conversations")
-
+    
     # Get student_id
     conn = sqlite3.connect(ACCOUNTS_DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id FROM accounts WHERE username = ?", (current_user.username,))
     row = c.fetchone()
     conn.close()
-
+    
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")
-
+    
     student_id = row[0]
-
+    
     # Get conversations
     conn = sqlite3.connect('chat_history.db')
     conn.row_factory = sqlite3.Row
@@ -691,7 +736,7 @@ async def get_my_conversations(current_user: User = Depends(get_current_user)):
     """, (student_id,))
     rows = c.fetchall()
     conn.close()
-
+    
     return {"conversations": [dict(row) for row in rows]}
 
 
@@ -699,10 +744,10 @@ async def get_my_conversations(current_user: User = Depends(get_current_user)):
 
 @router.get("/available-lessons")
 async def get_available_lessons(current_user: User = Depends(get_current_user)):
-    """Get all lessons available to the student (active files from teacher)."""
+    """Get all lessons available to the student (only from enrolled classrooms)."""
     if current_user.account_type != "student":
         raise HTTPException(status_code=403, detail="Only students can view lessons")
-
+    
     # Get student_id
     conn = sqlite3.connect(ACCOUNTS_DB_PATH)
     c = conn.cursor()
@@ -710,27 +755,59 @@ async def get_available_lessons(current_user: User = Depends(get_current_user)):
     row = c.fetchone()
     student_id = row[0] if row else None
     conn.close()
-
+    
     if not student_id:
         raise HTTPException(status_code=404, detail="Student not found")
-
-    # Get all active files (available lessons)
+    
+    # Get classrooms the student is enrolled in
+    from .classroom import DB_PATH as CLASSROOM_DB_PATH
+    classroom_conn = sqlite3.connect(CLASSROOM_DB_PATH)
+    classroom_c = classroom_conn.cursor()
+    classroom_c.execute("""
+        SELECT classroom_id FROM classroom_students WHERE student_id = ?
+    """, (student_id,))
+    enrolled_classroom_ids = [row[0] for row in classroom_c.fetchall()]
+    classroom_conn.close()
+    
+    if not enrolled_classroom_ids:
+        # Student not enrolled in any classrooms
+        return {"lessons": [], "classrooms": []}
+    
+    # Get all active files from enrolled classrooms
     conn = sqlite3.connect('chat_history.db')
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("""
+    
+    classroom_ids_str = ','.join('?' * len(enrolled_classroom_ids))
+    c.execute(f"""
         SELECT f.id, f.original_filename, f.uploaded_at, f.backboard_status,
+               f.classroom_id,
                c.name as category_name,
                sl.id as lesson_id, sl.started_at as lesson_started_at
         FROM files f
         LEFT JOIN categories c ON f.category_id = c.id
         LEFT JOIN student_lessons sl ON f.id = sl.file_id AND sl.student_id = ?
-        WHERE f.is_active = 1 AND f.backboard_status = 'indexed'
+        WHERE f.is_active = 1 
+          AND f.backboard_status = 'indexed'
+          AND f.classroom_id IN ({classroom_ids_str})
         ORDER BY f.uploaded_at DESC
-    """, (student_id,))
+    """, (student_id, *enrolled_classroom_ids))
     files = c.fetchall()
     conn.close()
-
+    
+    # Get classroom details
+    classroom_conn = sqlite3.connect(CLASSROOM_DB_PATH)
+    classroom_conn.row_factory = sqlite3.Row
+    classroom_c = classroom_conn.cursor()
+    classroom_c.execute(f"""
+        SELECT c.id, c.class_name, c.description
+        FROM classrooms c
+        WHERE c.id IN ({classroom_ids_str})
+        ORDER BY c.class_name
+    """, enrolled_classroom_ids)
+    classrooms = [dict(row) for row in classroom_c.fetchall()]
+    classroom_conn.close()
+    
     lessons = []
     for f in files:
         lessons.append({
@@ -739,18 +816,19 @@ async def get_available_lessons(current_user: User = Depends(get_current_user)):
             "category": f["category_name"],
             "uploaded_at": f["uploaded_at"],
             "started": f["lesson_id"] is not None,
-            "started_at": f["lesson_started_at"]
+            "started_at": f["lesson_started_at"],
+            "classroom_id": f["classroom_id"]
         })
+    
+    return {"lessons": lessons, "classrooms": classrooms}
 
-    return {"lessons": lessons}
 
-
-@router.get("/my-lessons")
-async def get_my_lessons(current_user: User = Depends(get_current_user)):
-    """Get lessons the student has already started."""
+@router.get("/my-classrooms")
+async def get_my_classrooms(current_user: User = Depends(get_current_user)):
+    """Get all classrooms the student is enrolled in."""
     if current_user.account_type != "student":
-        raise HTTPException(status_code=403, detail="Only students can view their lessons")
-
+        raise HTTPException(status_code=403, detail="Only students can view their classrooms")
+    
     # Get student_id
     conn = sqlite3.connect(ACCOUNTS_DB_PATH)
     c = conn.cursor()
@@ -758,10 +836,68 @@ async def get_my_lessons(current_user: User = Depends(get_current_user)):
     row = c.fetchone()
     student_id = row[0] if row else None
     conn.close()
-
+    
     if not student_id:
         raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Get enrolled classrooms with details
+    from .classroom import DB_PATH as CLASSROOM_DB_PATH
+    classroom_conn = sqlite3.connect(CLASSROOM_DB_PATH)
+    classroom_conn.row_factory = sqlite3.Row
+    c = classroom_conn.cursor()
+    c.execute("""
+        SELECT c.id, c.class_name, c.teacher_id, c.description, c.created_at,
+               cs.enrolled_at,
+               COUNT(DISTINCT cs2.student_id) as student_count
+        FROM classrooms c
+        INNER JOIN classroom_students cs ON c.id = cs.classroom_id AND cs.student_id = ?
+        LEFT JOIN classroom_students cs2 ON c.id = cs2.classroom_id
+        GROUP BY c.id
+        ORDER BY c.class_name
+    """, (student_id,))
+    rows = c.fetchall()
+    classroom_conn.close()
+    
+    # Get teacher names
+    classrooms = []
+    for row in rows:
+        conn_accounts = sqlite3.connect(ACCOUNTS_DB_PATH)
+        c_accounts = conn_accounts.cursor()
+        c_accounts.execute("SELECT full_name FROM accounts WHERE id = ?", (row['teacher_id'],))
+        teacher_row = c_accounts.fetchone()
+        conn_accounts.close()
+        
+        classrooms.append({
+            "id": row['id'],
+            "class_name": row['class_name'],
+            "teacher_id": row['teacher_id'],
+            "teacher_name": teacher_row[0] if teacher_row else "Unknown",
+            "description": row['description'],
+            "created_at": row['created_at'],
+            "enrolled_at": row['enrolled_at'],
+            "student_count": row['student_count']
+        })
+    
+    return {"classrooms": classrooms, "count": len(classrooms)}
 
+
+@router.get("/my-lessons")
+async def get_my_lessons(current_user: User = Depends(get_current_user)):
+    """Get lessons the student has already started."""
+    if current_user.account_type != "student":
+        raise HTTPException(status_code=403, detail="Only students can view their lessons")
+    
+    # Get student_id
+    conn = sqlite3.connect(ACCOUNTS_DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM accounts WHERE username = ?", (current_user.username,))
+    row = c.fetchone()
+    student_id = row[0] if row else None
+    conn.close()
+    
+    if not student_id:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
     # Get started lessons
     conn = sqlite3.connect('chat_history.db')
     conn.row_factory = sqlite3.Row
@@ -777,7 +913,7 @@ async def get_my_lessons(current_user: User = Depends(get_current_user)):
     """, (student_id,))
     lessons = [dict(row) for row in c.fetchall()]
     conn.close()
-
+    
     return {"lessons": lessons}
 
 
@@ -786,7 +922,7 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
     """Start a lesson - syncs the document to the student's assistant."""
     if current_user.account_type != "student":
         raise HTTPException(status_code=403, detail="Only students can start lessons")
-
+    
     # Get student info
     conn = sqlite3.connect(ACCOUNTS_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -794,51 +930,68 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
     c.execute("SELECT id, assistant_id FROM accounts WHERE username = ?", (current_user.username,))
     row = c.fetchone()
     conn.close()
-
+    
     if not row:
         raise HTTPException(status_code=404, detail="Student not found")
-
+    
     student_id = row["id"]
     student_assistant_id = row["assistant_id"]
-
+    
     if not student_assistant_id:
         raise HTTPException(status_code=400, detail="Student doesn't have an assistant. Please re-login.")
-
+    
     # Get file info
     conn = sqlite3.connect('chat_history.db')
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""
-        SELECT id, file_path, original_filename, backboard_status
+        SELECT id, file_path, original_filename, backboard_status, classroom_id
         FROM files WHERE id = ? AND is_active = 1
     """, (file_id,))
     file_row = c.fetchone()
-
+    
     if not file_row:
         conn.close()
         raise HTTPException(status_code=404, detail="Lesson not found or not available")
-
+    
+    # Verify student is enrolled in the classroom this file belongs to
+    file_classroom_id = file_row["classroom_id"]
+    if file_classroom_id:
+        from .classroom import DB_PATH as CLASSROOM_DB_PATH
+        classroom_conn = sqlite3.connect(CLASSROOM_DB_PATH)
+        classroom_c = classroom_conn.cursor()
+        classroom_c.execute("""
+            SELECT 1 FROM classroom_students 
+            WHERE classroom_id = ? AND student_id = ?
+        """, (file_classroom_id, student_id))
+        is_enrolled = classroom_c.fetchone() is not None
+        classroom_conn.close()
+        
+        if not is_enrolled:
+            conn.close()
+            raise HTTPException(status_code=403, detail="You are not enrolled in the classroom for this lesson")
+    
     # Check if already started
     c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (student_id, file_id))
     existing = c.fetchone()
-
+    
     if existing:
         # Already started, just update last_accessed
         c.execute("UPDATE student_lessons SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?", (existing["id"],))
         conn.commit()
         conn.close()
         return {"message": "Lesson already started", "lesson_id": existing["id"]}
-
+    
     # Upload document to student's assistant
     file_path = Path(file_row["file_path"])
     if not file_path.exists():
         conn.close()
         raise HTTPException(status_code=404, detail="Lesson file not found on server")
-
+    
     # Read file content
     with open(file_path, "rb") as f:
         file_content = f.read()
-
+    
     # Upload to student's assistant
     backboard_doc_id = None
     try:
@@ -849,6 +1002,7 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
                 files={"file": (file_row["original_filename"], file_content)},
                 timeout=60.0
             )
+            
             if response.status_code == 200:
                 doc_data = response.json()
                 backboard_doc_id = doc_data.get("document_id")
@@ -860,7 +1014,7 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
     except httpx.RequestError as e:
         conn.close()
         raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
-
+    
     # Record the started lesson
     c.execute("""
         INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
@@ -869,7 +1023,7 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
     lesson_id = c.lastrowid
     conn.commit()
     conn.close()
-
+    
     return {
         "message": "Lesson started successfully!",
         "lesson_id": lesson_id,
@@ -1019,7 +1173,9 @@ async def end_chat(conversation_id: int, authorization: Optional[str] = Header(N
         
         conn.commit()
         conn.close()
+        
         return {"message": f"Chat session {conversation_id} ended successfully"}
+    
     except HTTPException:
         raise
     except Exception as e:

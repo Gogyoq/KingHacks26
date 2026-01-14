@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from routers import student, teacher, session, accounts
+from routers import student, teacher, session, accounts, classroom
 import sqlite3
 
 app = FastAPI()
@@ -19,28 +19,38 @@ app.include_router(student.router)
 app.include_router(teacher.router)
 app.include_router(session.router)
 app.include_router(accounts.router)
+app.include_router(classroom.router)
+
 
 class MessageInput(BaseModel):
     text: str
 
+
 def init_db():
     conn = sqlite3.connect('chat_history.db')
     c = conn.cursor()
-
+    
     # Chat messages table
     c.execute('''CREATE TABLE IF NOT EXISTS messages
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   role TEXT,
                   content TEXT)''')
-
-    # Categories table
+    
+    # Categories table (with classroom_id)
     c.execute('''CREATE TABLE IF NOT EXISTS categories
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   name TEXT NOT NULL,
+                  classroom_id INTEGER,
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   is_active BOOLEAN DEFAULT 1)''')
-
-    # Files table
+    
+    # Add classroom_id to categories if it doesn't exist (migration)
+    try:
+        c.execute("ALTER TABLE categories ADD COLUMN classroom_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    # Files table (with classroom_id)
     c.execute('''CREATE TABLE IF NOT EXISTS files
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   filename TEXT NOT NULL,
@@ -48,19 +58,26 @@ def init_db():
                   file_path TEXT NOT NULL,
                   file_size INTEGER NOT NULL,
                   category_id INTEGER,
+                  classroom_id INTEGER,
                   uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   is_active BOOLEAN DEFAULT 0,
                   backboard_doc_id TEXT,
                   backboard_status TEXT DEFAULT 'not_uploaded',
                   FOREIGN KEY (category_id) REFERENCES categories(id))''')
-
+    
+    # Add classroom_id to files if it doesn't exist (migration)
+    try:
+        c.execute("ALTER TABLE files ADD COLUMN classroom_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
     # Sessions table
     c.execute('''CREATE TABLE IF NOT EXISTS sessions
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   name TEXT NOT NULL,
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   is_active BOOLEAN DEFAULT 0)''')
-
+    
     # Session files junction table
     c.execute('''CREATE TABLE IF NOT EXISTS session_files
                  (session_id INTEGER NOT NULL,
@@ -69,7 +86,7 @@ def init_db():
                   PRIMARY KEY (session_id, file_id),
                   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
                   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE)''')
-
+    
     # Student conversations table - links conversations to student accounts and lessons
     c.execute('''CREATE TABLE IF NOT EXISTS student_conversations
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +109,7 @@ def init_db():
         c.execute("ALTER TABLE student_conversations ADD COLUMN file_id INTEGER")
     except sqlite3.OperationalError:
         pass  # Column already exists
-
+    
     # Conversation messages table - stores messages with wrong answer flags and difficulty
     c.execute('''CREATE TABLE IF NOT EXISTS conversation_messages
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,13 +120,13 @@ def init_db():
                   difficulty TEXT,
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   FOREIGN KEY (conversation_id) REFERENCES student_conversations(id) ON DELETE CASCADE)''')
-
+    
     # Add difficulty column if it doesn't exist (migration for existing DBs)
     try:
         c.execute("ALTER TABLE conversation_messages ADD COLUMN difficulty TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
-
+    
     # Assistant config table - stores teacher instructions for the AI
     c.execute('''CREATE TABLE IF NOT EXISTS assistant_config
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,7 +134,7 @@ def init_db():
                   instruction_value TEXT NOT NULL,
                   is_active BOOLEAN DEFAULT 1,
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-
+    
     # Student lessons table - tracks which lessons each student has started
     c.execute('''CREATE TABLE IF NOT EXISTS student_lessons
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,11 +144,13 @@ def init_db():
                   started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   UNIQUE(student_id, file_id))''')
-
+    
     conn.commit()
     conn.close()
 
+
 init_db()
+
 
 @app.get("/chat")
 async def get_chat_history():

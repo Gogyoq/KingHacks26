@@ -1,14 +1,46 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 
-interface Category {
-  id: number;
-  name: string;
-  created_at: string;
-  is_active: boolean;
+const API_URL = "http://localhost:8000";
+
+interface DashboardStats {
+  active_students: number;
+  sessions_today: number;
+  class_accuracy: number;
+  students_needing_help: number;
 }
 
-interface FileItem {
+interface Student {
+  student_id?: number;
+  id?: number;
+  username: string;
+  full_name: string;
+  total_sessions?: number;
+  accuracy_percent?: number;
+  last_active?: string | null;
+  status?: "good" | "warning" | "needs_help";
+  email?: string;
+  account_active?: boolean;
+  enrolled_at?: string;
+}
+
+interface Classroom {
+  id: number;
+  class_name: string;
+  teacher_id: number;
+  teacher_name: string;
+  description: string;
+  created_at: string;
+  student_count: number;
+}
+
+interface AIInsights {
+  struggles: string;
+  strengths: string;
+  recommendations: string;
+}
+
+interface File {
   id: number;
   filename: string;
   original_filename: string;
@@ -18,7 +50,15 @@ interface FileItem {
   category_id: number | null;
   category_name: string | null;
   backboard_doc_id: string | null;
-  backboard_status: string | null;
+  backboard_status: string;
+  classroom_id: number;
+}
+
+interface Category {
+  id: number;
+  name: string;
+  classroom_id: number;
+  created_at: string;
 }
 
 interface Instruction {
@@ -27,1503 +67,1740 @@ interface Instruction {
   instruction_value: string;
   is_active: boolean;
   created_at: string;
-}
-
-interface Student {
-  id?: number;
-  username: string;
-  full_name: string;
-  email: string;
-  account_active: number;
+  classroom_id: number;
 }
 
 interface Conversation {
   id: number;
   student_id: number;
-  student_username?: string;
-  student_name?: string;
-  thread_id: string;
-  started_at: string;
-  last_message_at: string;
-  has_wrong_answers: boolean | number;
-}
-
-interface EndedConversation {
-  id: number;
-  student_id: number;
-  student_username?: string;
-  student_name?: string;
-  thread_id: string;
-  started_at: string;
-  ended_at: string;
-  has_wrong_answers: boolean | number;
-}
-
-interface ConversationMessage {
-  id: number;
-  role: 'user' | 'bot';
-  content: string;
-  is_wrong: boolean | number;
-  created_at: string;
-}
-
-// Dashboard interfaces
-interface DashboardStats {
-  active_students: number;
-  sessions_today: number;
-  class_accuracy: number;
-  students_needing_help: number;
-}
-
-interface DashboardStudent {
-  student_id: number;
   username: string;
   full_name: string;
-  total_sessions: number;
-  accuracy_percent: number;
-  last_active: string;
-  status: 'good' | 'warning' | 'needs_help';
+  thread_id: string;
+  started_at: string;
+  ended_at: string | null;
+  last_message_at: string;
+  has_wrong_answers: boolean;
 }
 
-interface AIInsights {
-  student: {
-    id: number;
-    username: string;
-    full_name: string;
-  };
-  stats: {
-    total_answers: number;
-    wrong_answers: number;
-    accuracy_percent: number;
-  };
-  insights: {
-    struggles: string;
-    strengths: string;
-    recommendations: string | string[];
-    suggested_focus: string;
-  };
+interface Message {
+  id: number;
+  conversation_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+  is_wrong: boolean;
 }
 
-const Teacher: React.FC = () => {
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [loading, setLoading] = useState(false);
+export default function Teacher() {
+  const { classroomId } = useParams<{ classroomId: string }>();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<"dashboard" | "students" | "files" | "instructions" | "chat-history" | "classrooms">("classrooms");
 
-  // Configuration tab state
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'files' | 'config' | 'students'>('dashboard');
-  const [instructions, setInstructions] = useState<Instruction[]>([]);
-  const [newInstruction, setNewInstruction] = useState({ name: '', value: '' });
-
-  // Dashboard tab state
+  // Dashboard state
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
-  const [dashboardStudents, setDashboardStudents] = useState<DashboardStudent[]>([]);
+  const [dashboardStudents, setDashboardStudents] = useState<Student[]>([]);
   const [dashboardLoading, setDashboardLoading] = useState(false);
-  const [aiInsights, setAiInsights] = useState<AIInsights | null>(null);
-  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
+
+  // AI Insights state
+  const [aiInsights, setAiInsights] = useState<Record<number, AIInsights>>({});
+  const [aiInsightsLoading, setAiInsightsLoading] = useState<Record<number, boolean>>({});
   const [selectedStudentForInsights, setSelectedStudentForInsights] = useState<number | null>(null);
 
-  // Students tab state
+  // Students list state
   const [students, setStudents] = useState<Student[]>([]);
   const [studentsLoading, setStudentsLoading] = useState(false);
-  const [studentsError, setStudentsError] = useState<string | null>(null);
 
+  // Files state
+  const [files, setFiles] = useState<File[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  // Conversations state
+  // Categories state
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [newCategoryName, setNewCategoryName] = useState("");
+
+  // Instructions state
+  const [instructions, setInstructions] = useState<Instruction[]>([]);
+  const [newInstruction, setNewInstruction] = useState({ name: "", value: "" });
+
+  // Chat history state
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
-  const [conversationMessages, setConversationMessages] = useState<ConversationMessage[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<number | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
-  const [selectedStudentFilter, setSelectedStudentFilter] = useState<number | null>(null);
+  const [conversationFilter, setConversationFilter] = useState<"all" | "active" | "ended">("all");
 
-  // Accordion state (Saurav's UX pattern)
-  const [expandedStudents, setExpandedStudents] = useState<Set<number>>(new Set());
-  const [expandedConversations, setExpandedConversations] = useState<Set<number>>(new Set());
+  // Classrooms state
+  const [allClassrooms, setAllClassrooms] = useState<Classroom[]>([]);
+  const [classroomsLoading, setClassroomsLoading] = useState(false);
+  const [selectedClassroomForManagement, setSelectedClassroomForManagement] = useState<number | null>(null);
+  const [enrolledStudents, setEnrolledStudents] = useState<Student[]>([]);
+  const [availableStudents, setAvailableStudents] = useState<Student[]>([]);
+  const [newClassroom, setNewClassroom] = useState({ class_name: "", description: "" });
+  const [editingClassroom, setEditingClassroom] = useState<Classroom | null>(null);
+  const [classroomFiles, setClassroomFiles] = useState<File[]>([]);
 
-  // Ended conversations state (for Student Chat Sessions)
-  const [endedConversations, setEndedConversations] = useState<EndedConversation[]>([]);
-  const [endedConversationsLoading, setEndedConversationsLoading] = useState(false);
-  const [expandedEndedSessions, setExpandedEndedSessions] = useState<Set<number>>(new Set());
-  const [selectedEndedThreadId, setSelectedEndedThreadId] = useState<string | null>(null);
-  const [endedChatHistory, setEndedChatHistory] = useState<ConversationMessage[]>([]);
+  const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
 
-  useEffect(() => {
-    fetchCategories();
-    fetchFiles();
-  }, []);
-
-  // Poll for status updates on pending files
-  useEffect(() => {
-    const pendingFiles = files.filter(f => f.backboard_status === 'pending' || f.backboard_status === 'processing');
-    if (pendingFiles.length === 0) return;
-
-    const pollInterval = setInterval(async () => {
-      // Refresh file status for pending files
-      for (const file of pendingFiles) {
-        try {
-          const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-          const response = await axios.get(
-            `http://localhost:8000/teacher/files/${file.id}/backboard-status`,
-            {
-              headers: {
-                ...(token && { 'Authorization': `Bearer ${token}` }),
-              },
-            }
-          );
-          if (response.data.status !== file.backboard_status) {
-            // Status changed, refresh all files
-            await fetchFiles();
-            break;
-          }
-        } catch (err) {
-          console.error(`Failed to check status for file ${file.id}`, err);
-        }
-      }
-    }, 5000); // Poll every 5 seconds
-
-    return () => clearInterval(pollInterval);
-  }, [files]);
+  // ============================================================================
+  // DATA FETCHING
+  // ============================================================================
 
   useEffect(() => {
-    if (activeTab === 'dashboard') {
-      fetchDashboardData();
-    }
-    if (activeTab === 'config') {
-      fetchInstructions();
-    }
-    if (activeTab === 'students') {
+    if (activeTab === "dashboard" && classroomId) {
+      fetchDashboardStats();
+      fetchDashboardStudents();
+    } else if (activeTab === "students" && classroomId) {
       fetchStudents();
+    } else if (activeTab === "files" && classroomId) {
+      fetchFiles();
+      fetchCategories();
+    } else if (activeTab === "instructions" && classroomId) {
+      fetchInstructions();
+    } else if (activeTab === "chat-history" && classroomId) {
       fetchConversations();
-      fetchEndedConversations();
+    } else if (activeTab === "classrooms") {
+      fetchAllClassrooms();
     }
-  }, [activeTab]);
+  }, [activeTab, classroomId]);
 
-  const fetchDashboardData = async () => {
+  useEffect(() => {
+    if (activeTab === "chat-history" && classroomId) {
+      fetchConversations();
+    }
+  }, [conversationFilter]);
+
+  useEffect(() => {
+    if (selectedClassroomForManagement) {
+      fetchEnrolledStudents(selectedClassroomForManagement);
+      fetchAvailableStudents(selectedClassroomForManagement);
+      fetchClassroomFiles(selectedClassroomForManagement);
+    }
+  }, [selectedClassroomForManagement]);
+
+  const fetchDashboardStats = async () => {
+    if (!classroomId) return;
     setDashboardLoading(true);
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const [statsRes, studentsRes] = await Promise.all([
-        axios.get('http://localhost:8000/teacher/dashboard/stats', {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        axios.get('http://localhost:8000/teacher/dashboard/students', {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-      ]);
-
-      setDashboardStats(statsRes.data);
-      setDashboardStudents(studentsRes.data.students);
-    } catch (err: any) {
-      console.error("Failed to fetch dashboard data", err);
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/dashboard/stats`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setDashboardStats(data);
+      }
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
     } finally {
       setDashboardLoading(false);
     }
   };
 
-  const fetchAIInsights = async (studentId: number) => {
-    setAiInsightsLoading(true);
-    setSelectedStudentForInsights(studentId);
-    setAiInsights(null);
+  const fetchDashboardStudents = async () => {
+    if (!classroomId) return;
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get(`http://localhost:8000/teacher/dashboard/student/${studentId}/ai-insights`, {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/dashboard/students`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-
-      setAiInsights(response.data);
-    } catch (err: any) {
-      console.error("Failed to fetch AI insights", err);
-      alert('Failed to get AI insights: ' + (err.response?.data?.detail || err.message));
-    } finally {
-      setAiInsightsLoading(false);
+      if (response.ok) {
+        const data = await response.json();
+        setDashboardStudents(data.students);
+      }
+    } catch (error) {
+      console.error("Error fetching dashboard students:", error);
     }
   };
 
   const fetchStudents = async () => {
+    if (!classroomId) return;
     setStudentsLoading(true);
-    setStudentsError(null);
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) {
-        setStudentsError('You must be logged in as a teacher to view students');
-        return;
-      }
-      const response = await axios.get('http://localhost:8000/accounts/students', {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/students`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-      setStudents(response.data.students);
-    } catch (err: any) {
-      console.error("Failed to fetch students", err);
-      setStudentsError(err.response?.data?.detail || 'Failed to fetch students');
+      if (response.ok) {
+        const data = await response.json();
+        setStudents(data.students);
+      }
+    } catch (error) {
+      console.error("Error fetching students:", error);
     } finally {
       setStudentsLoading(false);
     }
   };
 
+  const fetchFiles = async () => {
+    if (!classroomId) return;
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/files`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setFiles(data.files);
+      }
+    } catch (error) {
+      console.error("Error fetching files:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchCategories = async () => {
+    if (!classroomId) return;
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/categories`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(data.categories);
+      }
+    } catch (error) {
+      console.error("Error fetching categories:", error);
+    }
+  };
+
+  const fetchInstructions = async () => {
+    if (!classroomId) return;
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/instructions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setInstructions(data.instructions);
+      }
+    } catch (error) {
+      console.error("Error fetching instructions:", error);
+    }
+  };
+
   const fetchConversations = async () => {
+    if (!classroomId) return;
     setConversationsLoading(true);
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get('http://localhost:8000/teacher/students/conversations', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setConversations(response.data.conversations);
-    } catch (err: any) {
-      console.error("Failed to fetch conversations", err);
+      const response = await fetch(
+        `${API_URL}/teacher/${classroomId}/conversations?status=${conversationFilter}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setConversations(data.conversations);
+      }
+    } catch (error) {
+      console.error("Error fetching conversations:", error);
     } finally {
       setConversationsLoading(false);
     }
   };
 
-  const fetchConversationMessages = async (conversationId: number) => {
+  const fetchMessages = async (conversationId: number) => {
+    if (!classroomId) return;
     setMessagesLoading(true);
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get(`http://localhost:8000/teacher/conversations/${conversationId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setConversationMessages(response.data.messages);
-      setSelectedConversation(response.data.conversation);
-    } catch (err: any) {
-      console.error("Failed to fetch conversation messages", err);
+      const response = await fetch(
+        `${API_URL}/teacher/${classroomId}/conversations/${conversationId}/messages`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setMessages(data.messages);
+      }
+    } catch (error) {
+      console.error("Error fetching messages:", error);
     } finally {
       setMessagesLoading(false);
     }
   };
 
-  const fetchEndedConversations = async () => {
-    setEndedConversationsLoading(true);
+  const fetchAIInsights = async (studentId: number) => {
+    if (!classroomId) return;
+    setAiInsightsLoading({ ...aiInsightsLoading, [studentId]: true });
     try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
-
-      const response = await axios.get('http://localhost:8000/teacher/ended-conversations', {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/ai-insights`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ student_id: studentId }),
       });
-      setEndedConversations(response.data.conversations || []);
-    } catch (err: any) {
-      console.error("Failed to fetch ended conversations", err);
+      if (response.ok) {
+        const data = await response.json();
+        setAiInsights({ ...aiInsights, [studentId]: data.insights });
+      }
+    } catch (error) {
+      console.error("Error fetching AI insights:", error);
     } finally {
-      setEndedConversationsLoading(false);
+      setAiInsightsLoading({ ...aiInsightsLoading, [studentId]: false });
     }
   };
 
-  const fetchEndedChatHistory = async (conversationId: number) => {
-    try {
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-      if (!token) return;
+  // ============================================================================
+  // CLASSROOM MANAGEMENT FUNCTIONS
+  // ============================================================================
 
-      const response = await axios.get(`http://localhost:8000/teacher/conversations/${conversationId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` }
+  const fetchAllClassrooms = async () => {
+    setClassroomsLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/classroom/classes`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-      // Filter to show only user messages (student messages)
-      const userMessages = response.data.messages.filter((msg: ConversationMessage) => msg.role === 'user');
-      setEndedChatHistory(userMessages);
-    } catch (err: any) {
-      console.error("Failed to fetch ended chat history", err);
-      setEndedChatHistory([]);
+      if (response.ok) {
+        const data = await response.json();
+        setAllClassrooms(data.classrooms);
+      }
+    } catch (error) {
+      console.error("Error fetching classrooms:", error);
+    } finally {
+      setClassroomsLoading(false);
     }
   };
 
-  const toggleEndedSession = async (conversationId: number, threadId: string) => {
-    const newExpanded = new Set(expandedEndedSessions);
-    if (newExpanded.has(conversationId)) {
-      newExpanded.delete(conversationId);
-      if (selectedEndedThreadId === threadId) {
-        setSelectedEndedThreadId(null);
-        setEndedChatHistory([]);
-      }
-    } else {
-      newExpanded.add(conversationId);
-      setSelectedEndedThreadId(threadId);
-      await fetchEndedChatHistory(conversationId);
-    }
-    setExpandedEndedSessions(newExpanded);
-  };
-
-  const getFilteredConversations = () => {
-    if (selectedStudentFilter === null) {
-      return conversations;
-    }
-    return conversations.filter(c => c.student_id === selectedStudentFilter);
-  };
-
-  // Group conversations by student (Saurav's pattern)
-  const getConversationsGroupedByStudent = () => {
-    const grouped: Record<number, { student: { id: number; name: string }; conversations: Conversation[] }> = {};
-
-    conversations.forEach(conv => {
-      if (!grouped[conv.student_id]) {
-        grouped[conv.student_id] = {
-          student: {
-            id: conv.student_id,
-            name: conv.student_name || conv.student_username || `Student ${conv.student_id}`
-          },
-          conversations: []
-        };
-      }
-      grouped[conv.student_id].conversations.push(conv);
-    });
-
-    return Object.values(grouped);
-  };
-
-  // Toggle student accordion
-  const toggleStudentExpanded = (studentId: number) => {
-    setExpandedStudents(prev => {
-      const next = new Set(prev);
-      if (next.has(studentId)) {
-        next.delete(studentId);
-      } else {
-        next.add(studentId);
-      }
-      return next;
-    });
-  };
-
-  // Toggle conversation expanded and fetch messages
-  const toggleConversationExpanded = async (conv: Conversation) => {
-    const isExpanded = expandedConversations.has(conv.id);
-
-    setExpandedConversations(prev => {
-      const next = new Set(prev);
-      if (isExpanded) {
-        next.delete(conv.id);
-      } else {
-        next.add(conv.id);
-      }
-      return next;
-    });
-
-    // Fetch messages when expanding
-    if (!isExpanded) {
-      await fetchConversationMessages(conv.id);
-    }
-  };
-
-  const fetchCategories = async () => {
+  const fetchEnrolledStudents = async (classroomId: number) => {
     try {
-      const response = await axios.get('http://localhost:8000/teacher/categories');
-      setCategories(response.data.categories);
-    } catch (err) {
-      console.error("Failed to fetch categories", err);
+      const response = await fetch(`${API_URL}/classroom/${classroomId}/students`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setEnrolledStudents(data.students);
+      }
+    } catch (error) {
+      console.error("Error fetching enrolled students:", error);
     }
   };
 
-  const fetchFiles = async () => {
+  const fetchAvailableStudents = async (classroomId: number) => {
     try {
-      const response = await axios.get('http://localhost:8000/teacher/files');
-      setFiles(response.data.files);
-    } catch (err) {
-      console.error("Failed to fetch files", err);
+      const response = await fetch(`${API_URL}/classroom/${classroomId}/available-students`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableStudents(data.available_students);
+      }
+    } catch (error) {
+      console.error("Error fetching available students:", error);
     }
   };
 
-  const fetchInstructions = async () => {
+  const fetchClassroomFiles = async (classroomId: number) => {
     try {
-      const response = await axios.get('http://localhost:8000/teacher/config/instructions');
-      setInstructions(response.data.instructions);
-    } catch (err) {
-      console.error("Failed to fetch instructions", err);
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/files`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setClassroomFiles(data.files);
+      }
+    } catch (error) {
+      console.error("Error fetching classroom files:", error);
     }
   };
 
-  const handleAddInstruction = async () => {
-    if (!newInstruction.name.trim() || !newInstruction.value.trim()) {
-      alert('Please provide both name and instruction text');
+  const handleCreateClassroom = async () => {
+    if (!newClassroom.class_name.trim()) {
+      alert("Please enter a classroom name");
       return;
     }
 
     try {
-      await axios.post('http://localhost:8000/teacher/config/instructions', {
-        name: newInstruction.name,
-        value: newInstruction.value
-      });
-      setNewInstruction({ name: '', value: '' });
-      await fetchInstructions();
-    } catch (err: any) {
-      console.error("Failed to add instruction", err);
-      alert(`Failed to add instruction: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  const handleToggleInstruction = async (instructionId: number) => {
-    try {
-      await axios.post(`http://localhost:8000/teacher/config/instructions/${instructionId}/toggle`);
-      await fetchInstructions();
-    } catch (err: any) {
-      console.error("Failed to toggle instruction", err);
-      alert(`Failed to toggle instruction: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  const handleDeleteInstruction = async (instructionId: number) => {
-    if (!confirm('Are you sure you want to delete this instruction?')) return;
-
-    try {
-      await axios.delete(`http://localhost:8000/teacher/config/instructions/${instructionId}`);
-      await fetchInstructions();
-    } catch (err: any) {
-      console.error("Failed to delete instruction", err);
-      alert(`Failed to delete instruction: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  const handleFileUpload = async () => {
-    if (selectedFiles.length === 0) return;
-
-    const formData = new FormData();
-    selectedFiles.forEach((file) => {
-      formData.append("files", file);
-    });
-
-    try {
-      setUploading(true);
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-
-      await axios.post('http://localhost:8000/teacher/upload', formData, {
+      const response = await fetch(`${API_URL}/classroom/create`, {
+        method: "POST",
         headers: {
-          'Content-Type': 'multipart/form-data',
-          ...(token && { 'Authorization': `Bearer ${token}` }),
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify(newClassroom),
       });
-      setSelectedFiles([]);
-      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Upload failed", err);
-      const errorMsg = err.response?.data?.detail || err.message || 'Upload failed';
-      alert(`Upload failed: ${errorMsg}`);
-    } finally {
-      setUploading(false);
+
+      if (response.ok) {
+        await fetchAllClassrooms();
+        setNewClassroom({ class_name: "", description: "" });
+        alert("Classroom created successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Failed to create classroom: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Error creating classroom:", error);
+      alert("Failed to create classroom");
     }
   };
 
-  const handleFileSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (fileList) {
-      setSelectedFiles(Array.from(fileList));
-    }
-  };
-
-  const removeSelectedFile = (index: number) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleCreateCategory = async () => {
-    if (!newCategoryName.trim()) return;
+  const handleUpdateClassroom = async () => {
+    if (!editingClassroom) return;
 
     try {
-      await axios.post('http://localhost:8000/teacher/categories', { name: newCategoryName });
-      setNewCategoryName('');
-      await fetchCategories();
-    } catch (err: any) {
-      console.error("Failed to create category", err);
-      alert(`Failed to create category: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  // Helper to render Backboard status badge
-  const renderBackboardStatus = (file: FileItem) => {
-    const status = file.backboard_status;
-
-    if (!status || status === 'not_uploaded') {
-      return <span className="badge badge-ghost badge-sm">Not in AI</span>;
-    }
-
-    switch (status) {
-      case 'pending':
-        return (
-          <span className="badge badge-warning badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Processing
-          </span>
-        );
-      case 'processing':
-        return (
-          <span className="badge badge-info badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Processing
-          </span>
-        );
-      case 'converting':
-      case 'retrying':
-        return (
-          <span className="badge badge-info badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Converting
-          </span>
-        );
-      case 'indexed':
-        return <span className="badge badge-success badge-sm">Ready for AI</span>;
-      case 'error':
-      case 'upload_failed':
-      case 'upload_error':
-        return (
-          <span className="badge badge-warning badge-sm gap-1">
-            <span className="loading loading-spinner loading-xs"></span>
-            Waiting to retry
-          </span>
-        );
-      case 'conversion_failed':
-        return <span className="badge badge-error badge-sm">Failed</span>;
-      default:
-        return <span className="badge badge-ghost badge-sm">{status}</span>;
-    }
-  };
-
-  const handleDeleteCategory = async (categoryId: number) => {
-    if (!confirm('Are you sure you want to delete this category? Files in this category will become uncategorized.')) return;
-
-    try {
-      await axios.delete(`http://localhost:8000/teacher/categories/${categoryId}`);
-      await fetchCategories();
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to delete category", err);
-      alert(`Failed to delete category: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  const handleToggleCategoryActive = async (categoryId: number, isActive: boolean) => {
-    try {
-      const endpoint = isActive ? 'deactivate' : 'activate';
-      await axios.post(`http://localhost:8000/teacher/categories/${categoryId}/${endpoint}`);
-      await fetchCategories();
-    } catch (err: any) {
-      console.error("Failed to toggle category active status", err);
-      alert(`Failed to update category: ${err.response?.data?.detail || err.message}`);
-    }
-  };
-
-  const handleMoveToCategory = async (fileId: number, categoryId: number | null) => {
-    try {
-      await axios.put(`http://localhost:8000/teacher/files/${fileId}/category`, {
-        category_id: categoryId
+      const response = await fetch(`${API_URL}/classroom/${editingClassroom.id}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          class_name: editingClassroom.class_name,
+          description: editingClassroom.description,
+        }),
       });
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to move file", err);
-      alert(`Failed to move file: ${err.response?.data?.detail || err.message}`);
+
+      if (response.ok) {
+        await fetchAllClassrooms();
+        setEditingClassroom(null);
+        alert("Classroom updated successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Failed to update classroom: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Error updating classroom:", error);
+      alert("Failed to update classroom");
     }
   };
 
-  const handleToggleActive = async (fileId: number, isActive: boolean) => {
-    try {
-      const endpoint = isActive ? 'deactivate' : 'activate';
-      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+  const handleDeleteClassroom = async (classroomId: number, className: string) => {
+    if (!confirm(`Are you sure you want to delete "${className}"? This will remove all student enrollments.`)) {
+      return;
+    }
 
-      await axios.post(
-        `http://localhost:8000/teacher/files/${fileId}/${endpoint}`,
-        {},
+    try {
+      const response = await fetch(`${API_URL}/classroom/${classroomId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        await fetchAllClassrooms();
+        if (selectedClassroomForManagement === classroomId) {
+          setSelectedClassroomForManagement(null);
+        }
+        alert("Classroom deleted successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Failed to delete classroom: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Error deleting classroom:", error);
+      alert("Failed to delete classroom");
+    }
+  };
+
+  const handleAddStudent = async (studentId: number) => {
+    if (!selectedClassroomForManagement) return;
+
+    try {
+      const response = await fetch(
+        `${API_URL}/classroom/${selectedClassroomForManagement}/students/add`,
         {
+          method: "POST",
           headers: {
-            ...(token && { 'Authorization': `Bearer ${token}` }),
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
           },
+          body: JSON.stringify({ student_id: studentId }),
         }
       );
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to toggle file active status", err);
-      alert(`Failed to update file: ${err.response?.data?.detail || err.message}`);
+
+      if (response.ok) {
+        await fetchEnrolledStudents(selectedClassroomForManagement);
+        await fetchAvailableStudents(selectedClassroomForManagement);
+        await fetchAllClassrooms();
+        alert("Student added successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Failed to add student: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Error adding student:", error);
+      alert("Failed to add student");
+    }
+  };
+
+  const handleRemoveStudent = async (studentId: number) => {
+    if (!selectedClassroomForManagement) return;
+
+    if (!confirm("Are you sure you want to remove this student from the classroom?")) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_URL}/classroom/${selectedClassroomForManagement}/students/${studentId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      if (response.ok) {
+        await fetchEnrolledStudents(selectedClassroomForManagement);
+        await fetchAvailableStudents(selectedClassroomForManagement);
+        await fetchAllClassrooms();
+        alert("Student removed successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Failed to remove student: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Error removing student:", error);
+      alert("Failed to remove student");
+    }
+  };
+
+  // ============================================================================
+  // FILE OPERATIONS
+  // ============================================================================
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0 || !classroomId) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    for (let i = 0; i < fileList.length; i++) {
+      formData.append("files", fileList[i]);
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+
+      if (response.ok) {
+        await fetchFiles();
+        alert("Files uploaded successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Upload failed: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Upload failed");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
     }
   };
 
   const handleDeleteFile = async (fileId: number) => {
-    if (!confirm('Are you sure you want to delete this file?')) return;
+    if (!confirm("Are you sure you want to delete this file?") || !classroomId) return;
 
     try {
-      await axios.delete(`http://localhost:8000/teacher/files/${fileId}`);
-      await fetchFiles();
-    } catch (err: any) {
-      console.error("Failed to delete file", err);
-      alert(`Failed to delete file: ${err.response?.data?.detail || err.message}`);
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/files/${fileId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        await fetchFiles();
+        alert("File deleted successfully!");
+      } else {
+        const error = await response.json();
+        alert(`Delete failed: ${error.detail}`);
+      }
+    } catch (error) {
+      console.error("Delete error:", error);
     }
   };
 
+  const handleToggleFileActive = async (fileId: number) => {
+    if (!classroomId) return;
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/files/${fileId}/toggle`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-  const getFilesForCategory = (categoryId: number | null) => {
-    return files.filter(f => f.category_id === categoryId);
+      if (response.ok) {
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error("Toggle error:", error);
+    }
   };
 
-  return (
-    <div className="container mx-auto p-6 space-y-6">
-      {/* Tab Navigation */}
-      <div className="tabs tabs-boxed bg-base-100 shadow-xl p-2">
-        <a
-          className={`tab tab-lg ${activeTab === 'dashboard' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          Dashboard
-        </a>
-        <a
-          className={`tab tab-lg ${activeTab === 'files' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('files')}
-        >
-          Files & Categories
-        </a>
-        <a
-          className={`tab tab-lg ${activeTab === 'config' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('config')}
-        >
-          Configuration
-        </a>
-        <a
-          className={`tab tab-lg ${activeTab === 'students' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('students')}
-        >
-          Students
-        </a>
-      </div>
+  const handleUpdateFileCategory = async (fileId: number, categoryId: number | null) => {
+    if (!classroomId) return;
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/files/${fileId}/category`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ category_id: categoryId }),
+      });
 
-      {/* Dashboard Tab Content */}
-      {activeTab === 'dashboard' && (
-        <>
-          {dashboardLoading ? (
-            <div className="flex justify-center py-12">
-              <span className="loading loading-spinner loading-lg"></span>
-            </div>
-          ) : (
-            <>
-              {/* Class Overview Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Active Students</div>
-                  <div className="stat-value text-primary">{dashboardStats?.active_students || 0}</div>
-                  <div className="stat-desc">Students with sessions</div>
-                </div>
+      if (response.ok) {
+        await fetchFiles();
+      }
+    } catch (error) {
+      console.error("Category update error:", error);
+    }
+  };
 
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-secondary">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Sessions Today</div>
-                  <div className="stat-value text-secondary">{dashboardStats?.sessions_today || 0}</div>
-                  <div className="stat-desc">Learning sessions</div>
-                </div>
+  const handleBulkCategoryUpdate = async (categoryId: number | null) => {
+    if (selectedFiles.length === 0) {
+      alert("No files selected");
+      return;
+    }
 
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-success">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Class Accuracy</div>
-                  <div className="stat-value text-success">{dashboardStats?.class_accuracy || 0}%</div>
-                  <div className="stat-desc">Overall correct answers</div>
-                </div>
+    try {
+      await Promise.all(
+        selectedFiles.map((fileId) => handleUpdateFileCategory(fileId, categoryId))
+      );
+      setSelectedFiles([]);
+      alert("Category updated for selected files!");
+    } catch (error) {
+      console.error("Bulk update error:", error);
+    }
+  };
 
-                <div className="stat bg-base-100 shadow-xl rounded-lg">
-                  <div className="stat-figure text-warning">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="inline-block w-8 h-8 stroke-current">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                  </div>
-                  <div className="stat-title">Needs Help</div>
-                  <div className="stat-value text-warning">{dashboardStats?.students_needing_help || 0}</div>
-                  <div className="stat-desc">Students struggling</div>
-                </div>
-              </div>
+  const toggleFileSelection = (fileId: number) => {
+    setSelectedFiles((prev) =>
+      prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]
+    );
+  };
 
-              {/* Student Performance Table */}
-              <div className="card bg-base-100 shadow-xl">
-                <div className="card-body">
-                  <h2 className="card-title text-2xl mb-4">Student Performance</h2>
+  // ============================================================================
+  // CATEGORY OPERATIONS
+  // ============================================================================
 
-                  {dashboardStudents.length === 0 ? (
-                    <p className="text-gray-500 italic">No student data yet. Students will appear here once they start learning.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="table table-zebra w-full">
-                        <thead>
-                          <tr>
-                            <th>Student</th>
-                            <th>Sessions</th>
-                            <th>Accuracy</th>
-                            <th>Last Active</th>
-                            <th>Status</th>
-                            <th>AI Insights</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {dashboardStudents.map((student) => (
-                            <tr key={student.student_id}>
-                              <td>
-                                <div>
-                                  <div className="font-bold">{student.full_name}</div>
-                                  <div className="text-sm opacity-50">@{student.username}</div>
-                                </div>
-                              </td>
-                              <td>{student.total_sessions}</td>
-                              <td>
-                                <div className="flex items-center gap-2">
-                                  <progress
-                                    className={`progress w-20 ${
-                                      student.accuracy_percent >= 70 ? 'progress-success' :
-                                      student.accuracy_percent >= 50 ? 'progress-warning' :
-                                      'progress-error'
-                                    }`}
-                                    value={student.accuracy_percent}
-                                    max="100"
-                                  ></progress>
-                                  <span className="text-sm">{student.accuracy_percent}%</span>
-                                </div>
-                              </td>
-                              <td>{student.last_active ? new Date(student.last_active).toLocaleString() : 'Never'}</td>
-                              <td>
-                                <span className={`badge ${
-                                  student.status === 'good' ? 'badge-success' :
-                                  student.status === 'warning' ? 'badge-warning' :
-                                  'badge-error'
-                                }`}>
-                                  {student.status === 'good' ? 'Good' :
-                                   student.status === 'warning' ? 'Fair' :
-                                   'Needs Help'}
-                                </span>
-                              </td>
-                              <td>
-                                <button
-                                  className={`btn btn-sm btn-primary ${
-                                    aiInsightsLoading && selectedStudentForInsights === student.student_id ? 'loading' : ''
-                                  }`}
-                                  onClick={() => fetchAIInsights(student.student_id)}
-                                  disabled={aiInsightsLoading}
-                                >
-                                  {aiInsightsLoading && selectedStudentForInsights === student.student_id ? '' : 'Get Insights'}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </div>
+  const handleCreateCategory = async () => {
+    if (!newCategoryName.trim() || !classroomId) {
+      alert("Please enter a category name");
+      return;
+    }
 
-              {/* AI Insights Panel */}
-              {(aiInsights || aiInsightsLoading) && (
-                <div className="card bg-base-100 shadow-xl border-2 border-primary">
-                  <div className="card-body">
-                    <div className="flex items-center justify-between mb-4">
-                      <h2 className="card-title text-2xl">
-                        AI Insights {aiInsights && `for ${aiInsights.student.full_name}`}
-                      </h2>
-                      <button
-                        className="btn btn-sm btn-ghost"
-                        onClick={() => {
-                          setAiInsights(null);
-                          setSelectedStudentForInsights(null);
-                        }}
-                      >
-                        Close
-                      </button>
-                    </div>
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/categories`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: newCategoryName, classroom_id: parseInt(classroomId!) }),
+      });
 
-                    {aiInsightsLoading ? (
-                      <div className="flex flex-col items-center justify-center py-8">
-                        <span className="loading loading-spinner loading-lg text-primary"></span>
-                        <p className="mt-4 text-gray-500">Analyzing student data with AI...</p>
-                      </div>
-                    ) : aiInsights ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="stat bg-base-200 rounded-lg">
-                          <div className="stat-title">Performance Summary</div>
-                          <div className="stat-value text-lg">
-                            {aiInsights.stats.accuracy_percent}% Accuracy
-                          </div>
-                          <div className="stat-desc">
-                            {aiInsights.stats.total_answers - aiInsights.stats.wrong_answers} correct / {aiInsights.stats.total_answers} total
-                          </div>
-                        </div>
+      if (response.ok) {
+        await fetchCategories();
+        setNewCategoryName("");
+        alert("Category created!");
+      }
+    } catch (error) {
+      console.error("Create category error:", error);
+    }
+  };
 
-                        <div className="stat bg-primary text-primary-content rounded-lg">
-                          <div className="stat-title text-primary-content/70">Suggested Focus</div>
-                          <div className="stat-value text-lg">{aiInsights.insights.suggested_focus}</div>
-                          <div className="stat-desc text-primary-content/70">Priority area</div>
-                        </div>
+  const handleDeleteCategory = async (categoryId: number) => {
+    if (!confirm("Delete this category? Files will become uncategorized.") || !classroomId) return;
 
-                        <div className="card bg-error/10 border border-error/20">
-                          <div className="card-body p-4">
-                            <h3 className="font-bold text-error">Areas of Struggle</h3>
-                            <p className="text-sm">{aiInsights.insights.struggles}</p>
-                          </div>
-                        </div>
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/categories/${categoryId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-                        <div className="card bg-success/10 border border-success/20">
-                          <div className="card-body p-4">
-                            <h3 className="font-bold text-success">Strengths</h3>
-                            <p className="text-sm">{aiInsights.insights.strengths}</p>
-                          </div>
-                        </div>
+      if (response.ok) {
+        await fetchCategories();
+        await fetchFiles();
+        alert("Category deleted!");
+      }
+    } catch (error) {
+      console.error("Delete category error:", error);
+    }
+  };
 
-                        <div className="card bg-info/10 border border-info/20 md:col-span-2">
-                          <div className="card-body p-4">
-                            <h3 className="font-bold text-info">Recommendations</h3>
-                            {Array.isArray(aiInsights.insights.recommendations) ? (
-                              <ul className="list-disc list-inside text-sm space-y-1">
-                                {aiInsights.insights.recommendations.map((rec, idx) => (
-                                  <li key={idx}>{rec}</li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-sm whitespace-pre-wrap">{aiInsights.insights.recommendations}</p>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </>
-      )}
+  // ============================================================================
+  // INSTRUCTION OPERATIONS
+  // ============================================================================
 
-      {/* Files Tab Content */}
-      {activeTab === 'files' && (
-        <>
-          {/* Upload Section */}
-          <div className="card bg-base-100 shadow-xl">
-        <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">Upload Lessons</h2>
+  const handleCreateInstruction = async () => {
+    if (!newInstruction.name.trim() || !newInstruction.value.trim() || !classroomId) {
+      alert("Please fill in both name and instruction");
+      return;
+    }
 
-          <div className="form-control w-full">
-            <label className="label">
-              <span className="label-text">Pick one or more files to upload</span>
-            </label>
-            <input
-              type="file"
-              multiple={true}
-              onChange={handleFileSelection}
-              className="file-input file-input-bordered w-full"
-              accept="*/*"
-            />
-          </div>
+    try {
+      const response = await fetch(`${API_URL}/teacher/${classroomId}/instructions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(newInstruction),
+      });
 
-          {selectedFiles.length > 0 && (
-            <div className="mt-4">
-              <p className="font-semibold mb-2">Selected files ({selectedFiles.length}):</p>
-              <div className="space-y-2">
-                {selectedFiles.map((file, index) => (
-                  <div key={index} className="flex items-center justify-between bg-base-200 p-2 rounded">
-                    <span className="text-sm">{file.name} ({(file.size / 1024).toFixed(2)} KB)</span>
-                    <button
-                      onClick={() => removeSelectedFile(index)}
-                      className="btn btn-xs btn-circle btn-ghost"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+      if (response.ok) {
+        await fetchInstructions();
+        setNewInstruction({ name: "", value: "" });
+        alert("Instruction created!");
+      }
+    } catch (error) {
+      console.error("Create instruction error:", error);
+    }
+  };
 
-          <div className="card-actions justify-end mt-4">
-            <button
-              onClick={handleFileUpload}
-              disabled={selectedFiles.length === 0 || uploading}
-              className="btn btn-primary"
-            >
-              {uploading ? (
-                <>
-                  <span className="loading loading-spinner"></span>
-                  Uploading {selectedFiles.length} file(s)...
-                </>
-              ) : (
-                `Upload ${selectedFiles.length > 0 ? selectedFiles.length + ' file(s)' : 'to Backboard'}`
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
+  const handleDeleteInstruction = async (instructionId: number) => {
+    if (!confirm("Delete this instruction?") || !classroomId) return;
 
-      {/* Category Management Section */}
+    try {
+      const response = await fetch(
+        `${API_URL}/teacher/${classroomId}/instructions/${instructionId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      if (response.ok) {
+        await fetchInstructions();
+        alert("Instruction deleted!");
+      }
+    } catch (error) {
+      console.error("Delete instruction error:", error);
+    }
+  };
+
+  const handleToggleInstruction = async (instructionId: number) => {
+    if (!classroomId) return;
+    try {
+      const response = await fetch(
+        `${API_URL}/teacher/${classroomId}/instructions/${instructionId}/toggle`,
+        {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      if (response.ok) {
+        await fetchInstructions();
+      }
+    } catch (error) {
+      console.error("Toggle instruction error:", error);
+    }
+  };
+
+  // ============================================================================
+  // HELPER FUNCTIONS
+  // ============================================================================
+
+  const getFilesForCategory = (categoryId: number) => {
+    return files.filter((f) => f.category_id === categoryId);
+  };
+
+  const getUncategorizedFiles = () => {
+    return files.filter((f) => f.category_id === null);
+  };
+
+  const renderBackboardStatus = (file: File) => {
+    const statusColors: Record<string, string> = {
+      ready: "badge-success",
+      pending: "badge-warning",
+      processing: "badge-info",
+      upload_failed: "badge-error",
+      upload_error: "badge-error",
+      not_uploaded: "badge-ghost",
+    };
+
+    return (
+      <span className={`badge badge-sm ${statusColors[file.backboard_status] || "badge-ghost"}`}>
+        {file.backboard_status?.replace("_", " ") || "unknown"}
+      </span>
+    );
+  };
+
+  const getStatusBadgeClass = (status: string) => {
+    switch (status) {
+      case "good":
+        return "badge-success";
+      case "warning":
+        return "badge-warning";
+      case "needs_help":
+        return "badge-error";
+      default:
+        return "badge-ghost";
+    }
+  };
+
+  // ============================================================================
+  // RENDER FUNCTIONS
+  // ============================================================================
+
+  const renderClassrooms = () => (
+    <div className="space-y-6">
+      {/* Create New Classroom */}
       <div className="card bg-base-100 shadow-xl">
         <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">Create Category</h2>
-
-          <div className="flex gap-2">
+          <h2 className="card-title">Create New Classroom</h2>
+          <div className="space-y-3">
             <input
               type="text"
-              value={newCategoryName}
-              onChange={(e) => setNewCategoryName(e.target.value)}
-              placeholder="Category name"
-              className="input input-bordered flex-1"
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateCategory()}
+              placeholder="Classroom name (e.g., 'Math 101')"
+              className="input input-bordered w-full"
+              value={newClassroom.class_name}
+              onChange={(e) => setNewClassroom({ ...newClassroom, class_name: e.target.value })}
             />
-            <button
-              onClick={handleCreateCategory}
-              disabled={!newCategoryName.trim()}
-              className="btn btn-primary"
-            >
-              Create
+            <textarea
+              placeholder="Description (optional)"
+              className="textarea textarea-bordered w-full"
+              value={newClassroom.description}
+              onChange={(e) => setNewClassroom({ ...newClassroom, description: e.target.value })}
+            />
+            <button className="btn btn-primary" onClick={handleCreateClassroom}>
+              Create Classroom
             </button>
           </div>
         </div>
       </div>
 
-      {/* Categories List Section */}
+      {/* All Classrooms List */}
       <div className="card bg-base-100 shadow-xl">
         <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">Manage Categories</h2>
-
-          {categories.length > 0 ? (
-            <div className="space-y-2">
-              {categories.map((category) => (
-                <div key={category.id} className="card bg-base-200 shadow">
-                  <div className="card-body p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <p className="font-semibold">{category.name}</p>
-                        <p className="text-sm text-gray-500">
-                          {getFilesForCategory(category.id).length} file(s)
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleToggleCategoryActive(category.id, category.is_active)}
-                          className={`btn btn-sm ${category.is_active ? 'btn-success' : 'btn-outline'}`}
-                        >
-                          {category.is_active ? 'Active' : 'Inactive'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCategory(category.id)}
-                          className="btn btn-sm btn-error"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+          <h2 className="card-title">Your Classrooms</h2>
+          {classroomsLoading ? (
+            <div className="flex justify-center">
+              <span className="loading loading-spinner loading-lg"></span>
+            </div>
+          ) : allClassrooms.length === 0 ? (
+            <div className="alert">
+              <span>No classrooms yet. Create one above!</span>
             </div>
           ) : (
-            <p className="text-gray-500 italic">No categories yet. Create one above!</p>
-          )}
-        </div>
-      </div>
-
-      {/* File Management Section */}
-      <div className="card bg-base-100 shadow-xl">
-        <div className="card-body">
-          <h2 className="card-title text-2xl mb-4">File Management</h2>
-
-          {/* Uncategorized Files */}
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-2">Uncategorized</h3>
-            <div className="space-y-2">
-              {getFilesForCategory(null).map((file) => (
-                <div key={file.id} className="card bg-base-200 shadow">
-                  <div className="card-body p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="font-semibold">{file.original_filename}</p>
-                          {renderBackboardStatus(file)}
-                        </div>
-                        <p className="text-sm text-gray-500">
-                          {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <select
-                          className="select select-bordered select-sm"
-                          value={file.category_id || ''}
-                          onChange={(e) => handleMoveToCategory(file.id, e.target.value ? Number(e.target.value) : null)}
-                        >
-                          <option value="">Move to...</option>
-                          {categories.map((cat) => (
-                            <option key={cat.id} value={cat.id}>{cat.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => handleToggleActive(file.id, file.is_active)}
-                          className={`btn btn-sm ${file.is_active ? 'btn-success' : 'btn-outline'}`}
-                        >
-                          {file.is_active ? 'Active' : 'Activate'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteFile(file.id)}
-                          className="btn btn-sm btn-error"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {getFilesForCategory(null).length === 0 && (
-                <p className="text-gray-500 italic">No uncategorized files</p>
-              )}
-            </div>
-          </div>
-
-          {/* Categorized Files */}
-          {categories.map((category) => (
-            <div key={category.id} className="mb-6">
-              <h3 className="text-lg font-semibold mb-2">{category.name}</h3>
-              <div className="space-y-2">
-                {getFilesForCategory(category.id).map((file) => (
-                  <div key={file.id} className="card bg-base-200 shadow">
-                    <div className="card-body p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="font-semibold">{file.original_filename}</p>
-                            {renderBackboardStatus(file)}
-                          </div>
-                          <p className="text-sm text-gray-500">
-                            {(file.file_size / 1024).toFixed(2)} KB • {new Date(file.uploaded_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="flex gap-2">
-                          <select
-                            className="select select-bordered select-sm"
-                            value={file.category_id || ''}
-                            onChange={(e) => handleMoveToCategory(file.id, e.target.value ? Number(e.target.value) : null)}
-                          >
-                            <option value="">Uncategorized</option>
-                            {categories.map((cat) => (
-                              <option key={cat.id} value={cat.id}>{cat.name}</option>
-                            ))}
-                          </select>
-                          <button
-                            onClick={() => handleToggleActive(file.id, file.is_active)}
-                            className={`btn btn-sm ${file.is_active ? 'btn-success' : 'btn-outline'}`}
-                          >
-                            {file.is_active ? 'Active' : 'Activate'}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteFile(file.id)}
-                            className="btn btn-sm btn-error"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {getFilesForCategory(category.id).length === 0 && (
-                  <p className="text-gray-500 italic">No files in this category</p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-        </>
-      )}
-
-      {/* Configuration Tab Content */}
-      {activeTab === 'config' && (
-        <>
-          <div className="card bg-base-100 shadow-xl">
-            <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Custom Instructions</h2>
-              <p className="text-sm text-gray-600 mb-4">
-                Add custom rules and instructions that will guide the AI when teaching students.
-                These instructions will be included in every conversation.
-              </p>
-
-              {/* Add Instruction Form */}
-              <div className="card bg-base-200 p-4 mb-6">
-                <h3 className="font-semibold mb-3">Add New Instruction</h3>
-                <input
-                  type="text"
-                  placeholder="Instruction Name (e.g., 'Focus on Multiplication')"
-                  className="input input-bordered mb-3 w-full"
-                  value={newInstruction.name}
-                  onChange={(e) => setNewInstruction({ ...newInstruction, name: e.target.value })}
-                />
-                <textarea
-                  placeholder="Instruction text (e.g., 'Only ask multiplication questions between 1-12')"
-                  className="textarea textarea-bordered mb-3 w-full h-24"
-                  value={newInstruction.value}
-                  onChange={(e) => setNewInstruction({ ...newInstruction, value: e.target.value })}
-                />
-                <button
-                  className="btn btn-primary"
-                  onClick={handleAddInstruction}
-                  disabled={!newInstruction.name.trim() || !newInstruction.value.trim()}
+            <div className="space-y-3">
+              {allClassrooms.map((classroom) => (
+                <div
+                  key={classroom.id}
+                  className={`card ${
+                    selectedClassroomForManagement === classroom.id ? "bg-primary/10" : "bg-base-200"
+                  }`}
                 >
-                  Add Instruction
-                </button>
-              </div>
-
-              {/* Instructions List */}
-              <div className="space-y-3">
-                <h3 className="font-semibold text-lg">Active Instructions</h3>
-                {instructions.length > 0 ? (
-                  instructions.map((inst) => (
-                    <div key={inst.id} className="card bg-base-200 shadow">
-                      <div className="card-body p-4">
-                        <div className="flex items-start justify-between gap-4">
+                  <div className="card-body">
+                    {editingClassroom?.id === classroom.id ? (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          className="input input-bordered w-full"
+                          value={editingClassroom.class_name}
+                          onChange={(e) =>
+                            setEditingClassroom({ ...editingClassroom, class_name: e.target.value })
+                          }
+                        />
+                        <textarea
+                          className="textarea textarea-bordered w-full"
+                          value={editingClassroom.description}
+                          onChange={(e) =>
+                            setEditingClassroom({ ...editingClassroom, description: e.target.value })
+                          }
+                        />
+                        <div className="flex gap-2">
+                          <button className="btn btn-sm btn-success" onClick={handleUpdateClassroom}>
+                            Save
+                          </button>
+                          <button
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => setEditingClassroom(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between items-start">
                           <div className="flex-1">
-                            <h4 className="font-bold text-lg">{inst.instruction_name}</h4>
-                            <p className="text-sm mt-2 whitespace-pre-wrap">{inst.instruction_value}</p>
-                            <p className="text-xs text-gray-500 mt-2">
-                              Created: {new Date(inst.created_at).toLocaleDateString()}
-                            </p>
+                            <h3 className="card-title">{classroom.class_name}</h3>
+                            {classroom.description && (
+                              <p className="text-sm opacity-70 mt-1">{classroom.description}</p>
+                            )}
+                            <div className="flex gap-4 mt-2 text-sm">
+                              <span className="badge badge-info">{classroom.student_count} students</span>
+                              <span className="opacity-50">
+                                Created: {new Date(classroom.created_at).toLocaleDateString()}
+                              </span>
+                            </div>
                           </div>
                           <div className="flex gap-2">
                             <button
-                              className={`btn btn-sm ${inst.is_active ? 'btn-success' : 'btn-outline'}`}
-                              onClick={() => handleToggleInstruction(inst.id)}
+                              className="btn btn-sm btn-primary"
+                              onClick={() => {
+                                if (selectedClassroomForManagement === classroom.id) {
+                                  setSelectedClassroomForManagement(null);
+                                } else {
+                                  setSelectedClassroomForManagement(classroom.id);
+                                }
+                              }}
                             >
-                              {inst.is_active ? 'Active' : 'Inactive'}
+                              {selectedClassroomForManagement === classroom.id ? "Hide" : "Manage"}
                             </button>
                             <button
-                              className="btn btn-sm btn-error"
-                              onClick={() => handleDeleteInstruction(inst.id)}
+                              className="btn btn-sm btn-ghost"
+                              onClick={() => setEditingClassroom(classroom)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="btn btn-sm btn-error btn-outline"
+                              onClick={() => handleDeleteClassroom(classroom.id, classroom.class_name)}
                             >
                               Delete
                             </button>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  ))
+
+                        {/* Classroom Management Panel */}
+                        {selectedClassroomForManagement === classroom.id && (
+                          <div className="mt-4 pt-4 border-t space-y-4">
+                            {/* Enrolled Students */}
+                            <div>
+                              <h4 className="font-bold mb-2">Enrolled Students ({enrolledStudents.length})</h4>
+                              {enrolledStudents.length === 0 ? (
+                                <div className="alert alert-info">
+                                  <span>No students enrolled yet</span>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {enrolledStudents.map((student) => (
+                                    <div
+                                      key={student.id}
+                                      className="flex justify-between items-center p-3 bg-base-100 rounded-lg"
+                                    >
+                                      <div>
+                                        <div className="font-semibold">{student.full_name}</div>
+                                        <div className="text-sm opacity-70">
+                                          @{student.username} • {student.email}
+                                        </div>
+                                        <div className="text-xs opacity-50">
+                                          Enrolled: {new Date(student.enrolled_at!).toLocaleDateString()}
+                                        </div>
+                                      </div>
+                                      <button
+                                        className="btn btn-sm btn-error btn-outline"
+                                        onClick={() => handleRemoveStudent(student.id!)}
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Available Students */}
+                            <div>
+                              <h4 className="font-bold mb-2">
+                                Available Students to Add ({availableStudents.length})
+                              </h4>
+                              {availableStudents.length === 0 ? (
+                                <div className="alert">
+                                  <span>All students are already enrolled</span>
+                                </div>
+                              ) : (
+                                <div className="space-y-2 max-h-60 overflow-y-auto">
+                                  {availableStudents.map((student) => (
+                                    <div
+                                      key={student.id}
+                                      className="flex justify-between items-center p-3 bg-base-100 rounded-lg"
+                                    >
+                                      <div>
+                                        <div className="font-semibold">{student.full_name}</div>
+                                        <div className="text-sm opacity-70">
+                                          @{student.username} • {student.email}
+                                        </div>
+                                      </div>
+                                      <button
+                                        className="btn btn-sm btn-success"
+                                        onClick={() => handleAddStudent(student.id!)}
+                                      >
+                                        Add
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Current Files/Lessons */}
+                            <div>
+                              <h4 className="font-bold mb-2">
+                                Current Lessons/Files ({classroomFiles.length})
+                              </h4>
+                              {classroomFiles.length === 0 ? (
+                                <div className="alert">
+                                  <span>No files uploaded yet</span>
+                                </div>
+                              ) : (
+                                <div className="space-y-2 max-h-60 overflow-y-auto">
+                                  {classroomFiles.map((file) => (
+                                    <div key={file.id} className="p-3 bg-base-100 rounded-lg">
+                                      <div className="flex justify-between items-center">
+                                        <div className="flex-1">
+                                          <div className="font-semibold">
+                                            {file.original_filename} {renderBackboardStatus(file)}
+                                          </div>
+                                          <div className="text-sm opacity-70">
+                                            {(file.file_size / 1024).toFixed(2)} KB •{" "}
+                                            {new Date(file.uploaded_at).toLocaleDateString()}
+                                            {file.category_name && (
+                                              <span className="ml-2 badge badge-sm">
+                                                {file.category_name}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <span
+                                          className={`badge ${
+                                            file.is_active ? "badge-success" : "badge-ghost"
+                                          }`}
+                                        >
+                                          {file.is_active ? "Active" : "Inactive"}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderDashboard = () => {
+    if (!classroomId) {
+      return (
+        <div className="alert alert-warning">
+          <span>Please select a classroom from the Classrooms tab to view dashboard</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        {dashboardLoading ? (
+          <div className="flex justify-center">
+            <span className="loading loading-spinner loading-lg"></span>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="stat bg-base-200 rounded-box">
+                <div className="stat-title">Active Students</div>
+                <div className="stat-value text-primary">{dashboardStats?.active_students || 0}</div>
+                <div className="stat-desc">Last 7 days</div>
+              </div>
+              <div className="stat bg-base-200 rounded-box">
+                <div className="stat-title">Sessions Today</div>
+                <div className="stat-value text-secondary">{dashboardStats?.sessions_today || 0}</div>
+                <div className="stat-desc">Active learning sessions</div>
+              </div>
+              <div className="stat bg-base-200 rounded-box">
+                <div className="stat-title">Class Accuracy</div>
+                <div className="stat-value text-accent">{dashboardStats?.class_accuracy || 0}%</div>
+                <div className="stat-desc">Overall performance</div>
+              </div>
+              <div className="stat bg-base-200 rounded-box">
+                <div className="stat-title">Need Help</div>
+                <div className="stat-value text-error">{dashboardStats?.students_needing_help || 0}</div>
+                <div className="stat-desc">Students struggling</div>
+              </div>
+            </div>
+
+            {/* Student Performance Table */}
+            <div className="card bg-base-100 shadow-xl">
+              <div className="card-body">
+                <h2 className="card-title">Student Performance</h2>
+                {dashboardStudents.length === 0 ? (
+                  <div className="alert">
+                    <span>No student data yet. Students will appear here once they start learning.</span>
+                  </div>
                 ) : (
-                  <p className="text-gray-500 italic">No instructions yet. Add one above to customize the AI's behavior!</p>
+                  <div className="overflow-x-auto">
+                    <table className="table table-zebra">
+                      <thead>
+                        <tr>
+                          <th>Student</th>
+                          <th>Sessions</th>
+                          <th>Accuracy</th>
+                          <th>Last Active</th>
+                          <th>Status</th>
+                          <th>AI Insights</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dashboardStudents.map((student) => (
+                          <tr key={student.student_id}>
+                            <td>
+                              <div>
+                                <div className="font-bold">{student.full_name}</div>
+                                <div className="text-sm opacity-50">@{student.username}</div>
+                              </div>
+                            </td>
+                            <td>{student.total_sessions}</td>
+                            <td>{student.accuracy_percent}%</td>
+                            <td>
+                              {student.last_active
+                                ? new Date(student.last_active).toLocaleString()
+                                : "Never"}
+                            </td>
+                            <td>
+                              <span className={`badge ${getStatusBadgeClass(student.status!)}`}>
+                                {student.status === "good"
+                                  ? "Good"
+                                  : student.status === "warning"
+                                  ? "Fair"
+                                  : "Needs Help"}
+                              </span>
+                            </td>
+                            <td>
+                              <button
+                                className="btn btn-sm btn-outline"
+                                onClick={() => {
+                                  if (selectedStudentForInsights === student.student_id) {
+                                    setSelectedStudentForInsights(null);
+                                  } else {
+                                    setSelectedStudentForInsights(student.student_id!);
+                                    if (!aiInsights[student.student_id!]) {
+                                      fetchAIInsights(student.student_id!);
+                                    }
+                                  }
+                                }}
+                              >
+                                {selectedStudentForInsights === student.student_id ? "Hide" : "View"}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {dashboardStudents.map(
+                          (student) =>
+                            selectedStudentForInsights === student.student_id && (
+                              <tr key={`insights-${student.student_id}`}>
+                                <td colSpan={6} className="bg-base-200">
+                                  {aiInsightsLoading[student.student_id!] ? (
+                                    <div className="flex justify-center p-4">
+                                      <span className="loading loading-spinner"></span>
+                                      <span className="ml-2">Analyzing student data with AI...</span>
+                                    </div>
+                                  ) : aiInsights[student.student_id!] ? (
+                                    <div className="space-y-2 p-4">
+                                      <div>
+                                        <strong>Struggles:</strong>{" "}
+                                        {aiInsights[student.student_id!].struggles}
+                                      </div>
+                                      <div>
+                                        <strong>Strengths:</strong>{" "}
+                                        {aiInsights[student.student_id!].strengths}
+                                      </div>
+                                      <div>
+                                        <strong>Recommendations:</strong>{" "}
+                                        {aiInsights[student.student_id!].recommendations}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>
-          </div>
+          </>
+        )}
+      </div>
+    );
+  };
 
-          {/* Info Card */}
-          <div className="card bg-info text-info-content shadow-xl">
-            <div className="card-body">
-              <h3 className="card-title">How Custom Instructions Work</h3>
-              <ul className="list-disc list-inside space-y-1">
-                <li>Instructions are automatically included in every student conversation</li>
-                <li>Active files and instructions work together to guide the AI</li>
-                <li>Toggle instructions on/off to test different teaching approaches</li>
-                <li>Changes apply to new conversations immediately</li>
-              </ul>
+  const renderStudents = () => {
+    if (!classroomId) {
+      return (
+        <div className="alert alert-warning">
+          <span>Please select a classroom from the Classrooms tab</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="card bg-base-100 shadow-xl">
+        <div className="card-body">
+          <h2 className="card-title">All Students</h2>
+          {studentsLoading ? (
+            <div className="flex justify-center">
+              <span className="loading loading-spinner loading-lg"></span>
+            </div>
+          ) : students.length === 0 ? (
+            <div className="alert">
+              <span>No students registered yet.</span>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table table-zebra">
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>Full Name</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {students.map((student) => (
+                    <tr key={student.student_id || student.id}>
+                      <td>{student.username}</td>
+                      <td>{student.full_name}</td>
+                      <td>{student.email}</td>
+                      <td>
+                        <span className={`badge ${student.account_active ? "badge-success" : "badge-error"}`}>
+                          {student.account_active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderFiles = () => {
+    if (!classroomId) {
+      return (
+        <div className="alert alert-warning">
+          <span>Please select a classroom from the Classrooms tab</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* Upload Section */}
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title">Upload Files</h2>
+            <input
+              type="file"
+              multiple
+              onChange={handleFileUpload}
+              className="file-input file-input-bordered w-full"
+              disabled={uploading}
+            />
+            {uploading && <progress className="progress progress-primary"></progress>}
+          </div>
+        </div>
+
+        {/* Category Creation */}
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title">Create Category</h2>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Category name"
+                className="input input-bordered flex-1"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+              />
+              <button className="btn btn-primary" onClick={handleCreateCategory}>
+                Create
+              </button>
             </div>
           </div>
-        </>
-      )}
+        </div>
 
-      {/* Students Tab Content */}
-      {activeTab === 'students' && (
-        <>
-          {/* Student List */}
-          <div className="card bg-base-100 shadow-xl">
+        {/* Bulk Operations */}
+        {selectedFiles.length > 0 && (
+          <div className="card bg-base-200">
             <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Student List</h2>
-
-              {studentsLoading && (
-                <div className="flex justify-center py-8">
-                  <span className="loading loading-spinner loading-lg"></span>
-                </div>
-              )}
-
-              {studentsError && (
-                <div className="alert alert-error">
-                  <span>{studentsError}</span>
-                </div>
-              )}
-
-              {!studentsLoading && !studentsError && students.length === 0 && (
-                <p className="text-gray-500 italic">No students registered yet.</p>
-              )}
-
-              {!studentsLoading && !studentsError && students.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="table table-zebra w-full">
-                    <thead>
-                      <tr>
-                        <th>Username</th>
-                        <th>Full Name</th>
-                        <th>Email</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {students.map((student) => (
-                        <tr key={student.username}>
-                          <td>{student.username}</td>
-                          <td>{student.full_name}</td>
-                          <td>{student.email}</td>
-                          <td>
-                            <span className={`badge ${student.account_active ? 'badge-success' : 'badge-error'}`}>
-                              {student.account_active ? 'Active' : 'Inactive'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <h3 className="font-bold">Selected files ({selectedFiles.length}):</h3>
+              <div className="flex gap-2 flex-wrap">
+                <select
+                  className="select select-bordered"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    handleBulkCategoryUpdate(val === "none" ? null : parseInt(val));
+                  }}
+                  defaultValue=""
+                >
+                  <option value="" disabled>
+                    Assign to category
+                  </option>
+                  <option value="none">Uncategorized</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn btn-ghost" onClick={() => setSelectedFiles([])}>
+                  Clear Selection
+                </button>
+              </div>
             </div>
           </div>
+        )}
 
-          {/* Student Chat Sessions - Ended Conversations */}
-          <div className="card bg-base-100 shadow-xl">
-            <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Student Chat Sessions</h2>
-              
-              {endedConversationsLoading && (
-                <div className="flex justify-center py-8">
-                  <span className="loading loading-spinner loading-lg"></span>
-                </div>
-              )}
-
-              {!endedConversationsLoading && endedConversations.length === 0 && (
-                <p className="text-gray-500 italic">No ended chat sessions yet. Students need to end their chats first.</p>
-              )}
-
-              {!endedConversationsLoading && endedConversations.length > 0 && (() => {
-                // Group ended conversations by student
-                const grouped: Record<string, EndedConversation[]> = {};
-                endedConversations.forEach(conv => {
-                  const studentKey = conv.student_name || conv.student_username || 'Student';
-                  if (!grouped[studentKey]) {
-                    grouped[studentKey] = [];
-                  }
-                  grouped[studentKey].push(conv);
-                });
-
-                return (
-                  <div className="space-y-4">
-                    {Object.entries(grouped).map(([studentName, sessions]) => (
-                      <div key={studentName} className="collapse collapse-arrow bg-base-200">
-                        <input type="checkbox" defaultChecked={false} />
-                        <div className="collapse-title text-lg font-semibold">
-                          {studentName} ({sessions.length} session{sessions.length > 1 ? 's' : ''})
-                        </div>
-                        <div className="collapse-content">
-                          <div className="space-y-2 mt-2">
-                            {sessions.map((session) => (
-                              <div key={session.id} className="card bg-base-100 shadow">
-                                <div className="card-body p-4">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex-1">
-                                      <p className="font-semibold">
-                                        Session {session.id} - Thread: {session.thread_id.substring(0, 8)}...
-                                      </p>
-                                      <p className="text-sm text-gray-500">
-                                        Started: {new Date(session.started_at).toLocaleString()} • 
-                                        Ended: {new Date(session.ended_at).toLocaleString()}
-                                      </p>
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <button
-                                        onClick={() => toggleEndedSession(session.id, session.thread_id)}
-                                        className="btn btn-sm btn-primary"
-                                      >
-                                        {expandedEndedSessions.has(session.id) ? 'Hide' : 'View'} Chat
-                                      </button>
-                                    </div>
-                                  </div>
-                                  
-                                  {expandedEndedSessions.has(session.id) && selectedEndedThreadId === session.thread_id && (
-                                    <div className="mt-4 border-t pt-4">
-                                      <h4 className="font-semibold mb-2">Chat History ({endedChatHistory.length} messages)</h4>
-                                      <div className="bg-base-200 rounded-lg p-4 max-h-96 overflow-y-auto space-y-3">
-                                        {endedChatHistory.length > 0 ? (
-                                          endedChatHistory.map((msg, idx) => (
-                                            <div key={idx} className={`chat ${msg.role === 'user' ? 'chat-end' : 'chat-start'}`}>
-                                              <div className="chat-header opacity-70 text-xs">
-                                                {msg.role === 'user' ? 'Student' : 'Assistant'} • {new Date(msg.created_at).toLocaleString()}
-                                              </div>
-                                              <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-primary' : 'chat-bubble-secondary'}`}>
-                                                {msg.content}
-                                              </div>
-                                            </div>
-                                          ))
-                                        ) : (
-                                          <p className="text-gray-500 italic text-center py-4">No messages found.</p>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
+        {/* Categories with Files */}
+        {loading ? (
+          <div className="flex justify-center">
+            <span className="loading loading-spinner loading-lg"></span>
+          </div>
+        ) : (
+          <>
+            {categories.map((category) => (
+              <div key={category.id} className="card bg-base-100 shadow-xl">
+                <div className="card-body">
+                  <div className="flex justify-between items-center">
+                    <h2 className="card-title">
+                      {category.name}
+                      <span className="badge badge-neutral">
+                        {getFilesForCategory(category.id).length} file(s)
+                      </span>
+                    </h2>
+                    <button
+                      className="btn btn-sm btn-error btn-outline"
+                      onClick={() => handleDeleteCategory(category.id)}
+                    >
+                      Delete Category
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {getFilesForCategory(category.id).length === 0 ? (
+                      <div className="alert">
+                        <span>No files in this category</span>
+                      </div>
+                    ) : (
+                      getFilesForCategory(category.id).map((file) => (
+                        <div
+                          key={file.id}
+                          className={`flex items-center justify-between p-3 rounded-lg ${
+                            selectedFiles.includes(file.id) ? "bg-primary/20" : "bg-base-200"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 flex-1">
+                            <input
+                              type="checkbox"
+                              className="checkbox"
+                              checked={selectedFiles.includes(file.id)}
+                              onChange={() => toggleFileSelection(file.id)}
+                            />
+                            <div className="flex-1">
+                              <div className="font-semibold">
+                                {file.original_filename} {renderBackboardStatus(file)}
                               </div>
-                            ))}
+                              <div className="text-sm text-base-content/70">
+                                {(file.file_size / 1024).toFixed(2)} KB •{" "}
+                                {new Date(file.uploaded_at).toLocaleDateString()}
+                              </div>
+                            </div>
                           </div>
+                          <div className="flex gap-2">
+                            <button
+                              className={`btn btn-sm ${file.is_active ? "btn-success" : "btn-ghost"}`}
+                              onClick={() => handleToggleFileActive(file.id)}
+                            >
+                              {file.is_active ? "Active" : "Inactive"}
+                            </button>
+                            <button
+                              className="btn btn-sm btn-error btn-outline"
+                              onClick={() => handleDeleteFile(file.id)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {/* Uncategorized Files */}
+            {getUncategorizedFiles().length > 0 && (
+              <div className="card bg-base-100 shadow-xl">
+                <div className="card-body">
+                  <h2 className="card-title">Uncategorized Files</h2>
+                  <div className="space-y-2">
+                    {getUncategorizedFiles().map((file) => (
+                      <div
+                        key={file.id}
+                        className={`flex items-center justify-between p-3 rounded-lg ${
+                          selectedFiles.includes(file.id) ? "bg-primary/20" : "bg-base-200"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 flex-1">
+                          <input
+                            type="checkbox"
+                            className="checkbox"
+                            checked={selectedFiles.includes(file.id)}
+                            onChange={() => toggleFileSelection(file.id)}
+                          />
+                          <div className="flex-1">
+                            <div className="font-semibold">
+                              {file.original_filename} {renderBackboardStatus(file)}
+                            </div>
+                            <div className="text-sm text-base-content/70">
+                              {(file.file_size / 1024).toFixed(2)} KB •{" "}
+                              {new Date(file.uploaded_at).toLocaleDateString()}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <select
+                            className="select select-sm select-bordered"
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val) handleUpdateFileCategory(file.id, parseInt(val));
+                            }}
+                            defaultValue=""
+                          >
+                            <option value="" disabled>
+                              Assign category
+                            </option>
+                            {categories.map((cat) => (
+                              <option key={cat.id} value={cat.id}>
+                                {cat.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className={`btn btn-sm ${file.is_active ? "btn-success" : "btn-ghost"}`}
+                            onClick={() => handleToggleFileActive(file.id)}
+                          >
+                            {file.is_active ? "Active" : "Inactive"}
+                          </button>
+                          <button
+                            className="btn btn-sm btn-error btn-outline"
+                            onClick={() => handleDeleteFile(file.id)}
+                          >
+                            Delete
+                          </button>
                         </div>
                       </div>
                     ))}
                   </div>
-                );
-              })()}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderInstructions = () => {
+    if (!classroomId) {
+      return (
+        <div className="alert alert-warning">
+          <span>Please select a classroom from the Classrooms tab</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* Create Instruction */}
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title">Add AI Instruction</h2>
+            <p className="text-sm opacity-70">
+              Add custom rules and instructions that will guide the AI when teaching students. These
+              instructions will be included in every conversation.
+            </p>
+            <div className="space-y-2">
+              <input
+                type="text"
+                placeholder="Instruction name (e.g., 'Encouraging tone')"
+                className="input input-bordered w-full"
+                value={newInstruction.name}
+                onChange={(e) => setNewInstruction({ ...newInstruction, name: e.target.value })}
+              />
+              <textarea
+                placeholder="Instruction content (e.g., 'Always use encouraging and positive language with students')"
+                className="textarea textarea-bordered w-full h-24"
+                value={newInstruction.value}
+                onChange={(e) => setNewInstruction({ ...newInstruction, value: e.target.value })}
+              />
+              <button className="btn btn-primary" onClick={handleCreateInstruction}>
+                Add Instruction
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* Conversation Viewer - Accordion Style (Saurav's UX) */}
+        {/* Instructions List */}
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title">Active Instructions</h2>
+            {instructions.length === 0 ? (
+              <div className="alert">
+                <span>No instructions yet. Add one above to customize the AI's behavior!</span>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {instructions.map((inst) => (
+                  <div
+                    key={inst.id}
+                    className={`p-4 rounded-lg ${
+                      inst.is_active ? "bg-success/10 border border-success" : "bg-base-200"
+                    }`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <h3 className="font-bold">{inst.instruction_name}</h3>
+                        <p className="text-sm mt-1">{inst.instruction_value}</p>
+                        <p className="text-xs opacity-50 mt-2">
+                          Created: {new Date(inst.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          className={`btn btn-sm ${inst.is_active ? "btn-success" : "btn-ghost"}`}
+                          onClick={() => handleToggleInstruction(inst.id)}
+                        >
+                          {inst.is_active ? "Active" : "Inactive"}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-error btn-outline"
+                          onClick={() => handleDeleteInstruction(inst.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderChatHistory = () => {
+    if (!classroomId) {
+      return (
+        <div className="alert alert-warning">
+          <span>Please select a classroom from the Classrooms tab</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* Filter */}
+        <div className="flex gap-2">
+          <button
+            className={`btn ${conversationFilter === "all" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setConversationFilter("all")}
+          >
+            All
+          </button>
+          <button
+            className={`btn ${conversationFilter === "active" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setConversationFilter("active")}
+          >
+            Active
+          </button>
+          <button
+            className={`btn ${conversationFilter === "ended" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setConversationFilter("ended")}
+          >
+            Ended
+          </button>
+        </div>
+
+        {/* Conversations List */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="card bg-base-100 shadow-xl">
             <div className="card-body">
-              <h2 className="card-title text-2xl mb-4">Student Conversations</h2>
-
-              {conversationsLoading && (
-                <div className="flex justify-center py-8">
-                  <span className="loading loading-spinner loading-lg"></span>
+              <h2 className="card-title">Conversations</h2>
+              {conversationsLoading ? (
+                <div className="flex justify-center">
+                  <span className="loading loading-spinner"></span>
                 </div>
-              )}
-
-              {!conversationsLoading && conversations.length === 0 && (
-                <p className="text-gray-500 italic">No conversations yet. Students will appear here once they start learning.</p>
-              )}
-
-              {!conversationsLoading && conversations.length > 0 && (
-                <div className="space-y-3">
-                  {getConversationsGroupedByStudent().map(({ student, conversations: studentConvs }) => (
-                    <div key={student.id} className="collapse collapse-arrow bg-base-200 rounded-lg">
-                      <input
-                        type="checkbox"
-                        checked={expandedStudents.has(student.id)}
-                        onChange={() => toggleStudentExpanded(student.id)}
-                      />
-                      <div className="collapse-title text-lg font-semibold flex items-center gap-3">
-                        <span>{student.name}</span>
-                        <span className="badge badge-neutral badge-sm">
-                          {studentConvs.length} session{studentConvs.length !== 1 ? 's' : ''}
-                        </span>
-                        {studentConvs.some(c => c.has_wrong_answers) && (
-                          <span className="badge badge-warning badge-sm">Needs Review</span>
+              ) : conversations.length === 0 ? (
+                <div className="alert">
+                  <span>No conversations yet. Students will appear here once they start learning.</span>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[600px] overflow-y-auto">
+                  {conversations.map((conv) => (
+                    <div
+                      key={conv.id}
+                      className={`p-3 rounded-lg cursor-pointer ${
+                        selectedConversation === conv.id ? "bg-primary/20" : "bg-base-200"
+                      }`}
+                      onClick={() => {
+                        setSelectedConversation(conv.id);
+                        fetchMessages(conv.id);
+                      }}
+                    >
+                      <div className="font-bold">
+                        {conv.full_name} (@{conv.username})
+                      </div>
+                      <div className="text-sm opacity-70">
+                        Session #{conv.id} • Thread: {conv.thread_id.substring(0, 8)}...
+                      </div>
+                      <div className="text-xs opacity-50">
+                        Started: {new Date(conv.started_at).toLocaleString()}
+                        {conv.ended_at && (
+                          <>
+                            {" "}
+                            • Ended: {new Date(conv.ended_at).toLocaleString()}
+                          </>
                         )}
                       </div>
-                      <div className="collapse-content">
-                        <div className="space-y-3 pt-2">
-                          {studentConvs.map((conv) => (
-                            <div key={conv.id} className="card bg-base-100 shadow">
-                              <div className="card-body p-4">
-                                {/* Session Header */}
-                                <div className="flex items-center justify-between">
-                                  <div className="flex-1">
-                                    <p className="font-semibold">
-                                      Session #{conv.id}
-                                    </p>
-                                    <p className="text-sm text-gray-500">
-                                      Started: {new Date(conv.started_at).toLocaleString()}
-                                    </p>
-                                    {conv.last_message_at && (
-                                      <p className="text-sm text-gray-500">
-                                        Last activity: {new Date(conv.last_message_at).toLocaleString()}
-                                      </p>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    {conv.has_wrong_answers ? (
-                                      <span className="badge badge-error badge-sm">Has Errors</span>
-                                    ) : (
-                                      <span className="badge badge-success badge-sm">All Correct</span>
-                                    )}
-                                    <button
-                                      onClick={() => toggleConversationExpanded(conv)}
-                                      className="btn btn-sm btn-primary"
-                                    >
-                                      {expandedConversations.has(conv.id) ? 'Hide' : 'View'} Chat
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {/* Expanded Chat History */}
-                                {expandedConversations.has(conv.id) && (
-                                  <div className="mt-4 border-t pt-4">
-                                    {messagesLoading && selectedConversation?.id === conv.id ? (
-                                      <div className="flex justify-center py-4">
-                                        <span className="loading loading-spinner loading-md"></span>
-                                      </div>
-                                    ) : selectedConversation?.id === conv.id && conversationMessages.length > 0 ? (
-                                      <>
-                                        {/* Stats Header */}
-                                        <div className="flex justify-between items-center mb-3">
-                                          <h4 className="font-semibold">
-                                            Chat History ({conversationMessages.length} messages)
-                                          </h4>
-                                          <div className="flex gap-2">
-                                            <span className="badge badge-success badge-sm">
-                                              {conversationMessages.filter(m => m.role === 'user' && !m.is_wrong).length} correct
-                                            </span>
-                                            <span className="badge badge-error badge-sm">
-                                              {conversationMessages.filter(m => m.role === 'user' && m.is_wrong).length} wrong
-                                            </span>
-                                          </div>
-                                        </div>
-
-                                        {/* Chat Bubbles */}
-                                        <div className="bg-base-200 rounded-lg p-4 max-h-96 overflow-y-auto space-y-3">
-                                          {conversationMessages.map((msg, idx) => (
-                                            <div key={msg.id || idx} className={`chat ${msg.role === 'user' ? 'chat-end' : 'chat-start'}`}>
-                                              <div className="chat-header text-xs mb-1">
-                                                {msg.role === 'user' ? 'Student' : 'StoryBot'}
-                                                {msg.role === 'user' && (
-                                                  msg.is_wrong ? (
-                                                    <span className="ml-2 badge badge-error badge-xs">WRONG</span>
-                                                  ) : (
-                                                    <span className="ml-2 badge badge-success badge-xs">CORRECT</span>
-                                                  )
-                                                )}
-                                              </div>
-                                              <div
-                                                className={`chat-bubble text-sm ${
-                                                  msg.role === 'user'
-                                                    ? msg.is_wrong
-                                                      ? 'bg-error text-error-content'
-                                                      : 'bg-success text-success-content'
-                                                    : 'chat-bubble-secondary'
-                                                }`}
-                                              >
-                                                {msg.content}
-                                              </div>
-                                              <div className="chat-footer text-xs opacity-50">
-                                                {new Date(msg.created_at).toLocaleTimeString()}
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </>
-                                    ) : (
-                                      <p className="text-gray-500 italic text-center py-4">
-                                        No messages in this conversation yet.
-                                      </p>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      {conv.has_wrong_answers && (
+                        <span className="badge badge-warning badge-sm mt-1">Has errors</span>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </div>
           </div>
-        </>
-      )}
+
+          {/* Messages */}
+          <div className="card bg-base-100 shadow-xl">
+            <div className="card-body">
+              <h2 className="card-title">Messages</h2>
+              {!selectedConversation ? (
+                <div className="alert">
+                  <span>Select a conversation to view messages</span>
+                </div>
+              ) : messagesLoading ? (
+                <div className="flex justify-center">
+                  <span className="loading loading-spinner"></span>
+                </div>
+              ) : messages.length === 0 ? (
+                <div className="alert">
+                  <span>No messages in this conversation yet.</span>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[600px] overflow-y-auto">
+                  {messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`p-3 rounded-lg ${
+                        msg.role === "user"
+                          ? msg.is_wrong
+                            ? "bg-error/10 border border-error"
+                            : "bg-info/10"
+                          : "bg-base-200"
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="font-bold">
+                          {msg.role === "user" ? "Student" : "AI Teacher"}
+                        </span>
+                        <span className="text-xs opacity-50">
+                          {new Date(msg.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+                      {msg.is_wrong && msg.role === "user" && (
+                        <span className="badge badge-error badge-sm mt-2">Incorrect Answer</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================================
+  // MAIN RENDER
+  // ============================================================================
+
+  return (
+    <div className="container mx-auto p-4">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold">
+          Teacher Dashboard{classroomId && ` - Classroom ${classroomId}`}
+        </h1>
+        <button className="btn btn-ghost" onClick={() => navigate("/")}>
+          Back to Home
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div className="tabs tabs-boxed mb-6">
+        <a
+          className={`tab ${activeTab === "classrooms" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("classrooms")}
+        >
+          Classrooms
+        </a>
+        <a
+          className={`tab ${activeTab === "dashboard" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("dashboard")}
+        >
+          Dashboard
+        </a>
+        <a
+          className={`tab ${activeTab === "students" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("students")}
+        >
+          Students
+        </a>
+        <a
+          className={`tab ${activeTab === "files" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("files")}
+        >
+          Files
+        </a>
+        <a
+          className={`tab ${activeTab === "instructions" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("instructions")}
+        >
+          Instructions
+        </a>
+        <a
+          className={`tab ${activeTab === "chat-history" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("chat-history")}
+        >
+          Chat History
+        </a>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === "classrooms" && renderClassrooms()}
+      {activeTab === "dashboard" && renderDashboard()}
+      {activeTab === "students" && renderStudents()}
+      {activeTab === "files" && renderFiles()}
+      {activeTab === "instructions" && renderInstructions()}
+      {activeTab === "chat-history" && renderChatHistory()}
     </div>
   );
-};
-
-export default Teacher;
+}
