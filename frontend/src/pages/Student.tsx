@@ -37,7 +37,7 @@ const Student: React.FC = () => {
   const [solveLoading, setSolveLoading] = useState(false);
   const [solveEnabled, setSolveEnabled] = useState(true);
   const [chatStarted, setChatStarted] = useState(false);
-  
+
   const storyEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when chat updates
@@ -129,6 +129,7 @@ const Student: React.FC = () => {
         const fetchedLessons = data.lessons || [];
         setLessons(fetchedLessons);
 
+        // Auto-select the first started lesson when student logs in
         if (selectedLessonId === null && fetchedLessons.length > 0) {
           const firstStartedLesson = fetchedLessons.find((l: Lesson) => l.started);
           if (firstStartedLesson) {
@@ -207,16 +208,24 @@ const Student: React.FC = () => {
     }
   };
 
-  const handleStartChat = async () => {
-    if (!selectedLessonId || isLoading || isChatEnded) return;
+  // Start a new chat session automatically
+  const handleStartChat = async (retryCount = 0) => {
+    if ((!selectedLessonId || isLoading || isChatEnded) && retryCount === 0) return;
+
+    // Max retries for indexing race condition
+    const MAX_RETRIES = 5;
+    let shouldRetry = false;
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
     if (!token) {
       alert('Please log in to start learning');
       return;
     }
 
-    setIsLoading(true);
-    setChatLog([{ role: 'bot', content: '' }]);
+    if (retryCount === 0) {
+      setIsLoading(true);
+      // Add placeholder for bot response only on first attempt
+      setChatLog([{ role: 'bot', content: '' }]);
+    }
 
     try {
       const response = await fetch('http://localhost:8000/student/chat', {
@@ -268,17 +277,40 @@ const Student: React.FC = () => {
                 setChatStarted(true);
               } else if (data.type === 'error') {
                 console.error('Error from server:', data.error);
+
+                // Check for HTTP 400 (Backboard indexing race condition)
+                if (data.error.includes('HTTP 400') && retryCount < MAX_RETRIES) {
+                  console.log(`Hit indexing race condition, retrying... (${retryCount + 1}/${MAX_RETRIES})`);
+                  setChatLog([{ role: 'bot', content: `Preparing your lesson... please wait (${retryCount + 1})...` }]);
+
+                  shouldRetry = true;
+                  break; // Break the inner loop, handling retry outside
+                }
+
                 setChatLog([{ role: 'bot', content: `Error: ${data.error}` }]);
               }
             }
           }
+          // Break outer loop if retrying
+          if (shouldRetry) break;
         }
       }
+
+      if (shouldRetry) {
+        // Exponential backoff: 2s, 4s, 8s...
+        const waitTime = 2000 * Math.pow(1.5, retryCount);
+        setTimeout(() => handleStartChat(retryCount + 1), waitTime);
+      }
+
     } catch (err) {
       console.error('Start chat failed', err);
+      // Also retry on network failures if needed, but primarily focusing on the 400 error
       setChatLog([{ role: 'bot', content: 'Error: Failed to start lesson' }]);
     } finally {
-      setIsLoading(false);
+      // Only turn off loading if NOT retrying
+      if (!shouldRetry) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -378,6 +410,7 @@ const Student: React.FC = () => {
     setChatLog([...newLog, { role: 'bot', content: '' }]);
 
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -425,6 +458,7 @@ const Student: React.FC = () => {
                 }
               } else if (data.type === 'content') {
                 accumulatedContent += data.content;
+                // Update the bot message in real-time
                 setChatLog(prevLog => {
                   const updatedLog = [...prevLog];
                   updatedLog[botMessageIndex] = { role: 'bot', content: accumulatedContent };
@@ -486,11 +520,10 @@ const Student: React.FC = () => {
                       key={lesson.id}
                       onClick={() => handleLessonSelect(lesson.id, lesson.started)}
                       disabled={startingLesson === lesson.id}
-                      className={`w-full text-left p-4 rounded-xl border-2 transition-all duration-300 ${
-                        selectedLessonId === lesson.id
-                          ? 'bg-[#8B4F47] border-[#8B4F47] text-white shadow-lg'
-                          : 'bg-white/50 border-[#8B9D83]/20 text-[#4A4A4A] hover:border-[#8B9D83] hover:shadow-md'
-                      }`}
+                      className={`w-full text-left p-4 rounded-xl border-2 transition-all duration-300 ${selectedLessonId === lesson.id
+                        ? 'bg-[#8B4F47] border-[#8B4F47] text-white shadow-lg'
+                        : 'bg-white/50 border-[#8B9D83]/20 text-[#4A4A4A] hover:border-[#8B9D83] hover:shadow-md'
+                        }`}
                     >
                       <div className="flex items-start gap-3">
                         <span className="text-2xl mt-1">
@@ -555,7 +588,7 @@ const Student: React.FC = () => {
                       Click the button below to start your interactive learning adventure.
                     </p>
                     <button
-                      onClick={handleStartChat}
+                      onClick={() => handleStartChat()}
                       disabled={isLoading}
                       className="px-8 py-4 bg-[#8B4F47] text-white font-semibold rounded-lg shadow-lg hover:bg-[#A0605A] hover:shadow-xl transition-all duration-300 disabled:opacity-50"
                     >
@@ -571,90 +604,97 @@ const Student: React.FC = () => {
                   </div>
                 )}
 
-                {chatLog.length === 0 && !selectedLessonId && (
-                  <div className="flex flex-col items-center justify-center h-full text-center">
-                    <div className="mb-6"><BookOpen className="w-16 h-16 mx-auto" /></div>
-                    <h3 className="text-2xl font-bold text-[#4A4A4A] mb-3">Select a lesson to begin</h3>
-                    <p className="text-[#4A4A4A]/70 max-w-md">
-                      Choose a book from your library on the left to start your learning journey.
-                    </p>
-                  </div>
-                )}
+
+                {
+                  chatLog.length === 0 && !selectedLessonId && (
+                    <div className="flex flex-col items-center justify-center h-full text-center">
+                      <div className="mb-6"><BookOpen className="w-16 h-16 mx-auto" /></div>
+                      <h3 className="text-2xl font-bold text-[#4A4A4A] mb-3">Select a lesson to begin</h3>
+                      <p className="text-[#4A4A4A]/70 max-w-md">
+                        Choose a book from your library on the left to start your learning journey.
+                      </p>
+                    </div>
+                  )
+                }
 
                 {/* Story Narration */}
-                {chatLog.length > 0 && (
-                  <div className="prose prose-lg max-w-none">
-                    <div className="story-content space-y-6">
-                      {chatLog.map((log, i) => (
-                        <div key={i}>
-                          {log.role === 'bot' ? (
-                            <div className="story-narration">
-                              <div className="text-[#4A4A4A] leading-relaxed whitespace-pre-wrap font-serif text-lg">
-                                {log.content}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="student-response my-6">
-                              <div className="flex items-start gap-3">
-                                <div className="flex-shrink-0 w-8 h-8 bg-[#6B9FA3] rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                                  You
-                                </div>
-                                <div className="flex-1 bg-[#6B9FA3]/10 border-l-4 border-[#6B9FA3] rounded-r-xl px-5 py-3">
-                                  <p className="text-[#4A4A4A] italic font-medium">"{log.content}"</p>
+                {
+                  chatLog.length > 0 && (
+                    <div className="prose prose-lg max-w-none">
+                      <div className="story-content space-y-6">
+                        {chatLog.map((log, i) => (
+                          <div key={i}>
+                            {log.role === 'bot' ? (
+                              <div className="story-narration">
+                                <div className="text-[#4A4A4A] leading-relaxed whitespace-pre-wrap font-serif text-lg">
+                                  {log.content}
                                 </div>
                               </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      <div ref={storyEndRef} />
+                            ) : (
+                              <div className="student-response my-6">
+                                <div className="flex items-start gap-3">
+                                  <div className="flex-shrink-0 w-8 h-8 bg-[#6B9FA3] rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                                    You
+                                  </div>
+                                  <div className="flex-1 bg-[#6B9FA3]/10 border-l-4 border-[#6B9FA3] rounded-r-xl px-5 py-3">
+                                    <p className="text-[#4A4A4A] italic font-medium">"{log.content}"</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <div ref={storyEndRef} />
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )
+                }
+              </div >
 
               {/* Action Controls */}
-              {chatStarted && !isChatEnded && (
-                <div className="px-8 py-4 bg-[#8B9D83]/5 border-t border-[#8B9D83]/20">
-                  <div className="flex gap-2 mb-4">
-                    <button
-                      onClick={handleGetHint}
-                      disabled={hintLoading || isLoading}
-                      className="flex-1 px-4 py-2 bg-[#DAA520]/20 text-[#A67C4D] rounded-lg border border-[#DAA520]/40 hover:bg-[#DAA520]/30 transition-all duration-300 font-medium text-sm disabled:opacity-50"
-                    >
-                      {hintLoading ? (
-                        <span className="flex items-center justify-center gap-2">
-                          <span className="loading loading-spinner loading-xs"></span>
-                          Getting Hint...
-                        </span>
-                      ) : (
-                        <span className="flex items-center justify-center gap-2">
-                          <Lightbulb className="w-4 h-4" /> Get Hint
-                        </span>
-                      )}
-                    </button>
-
-                    {solveEnabled && (
+              {
+                chatStarted && !isChatEnded && (
+                  <div className="px-8 py-4 bg-[#8B9D83]/5 border-t border-[#8B9D83]/20">
+                    <div className="flex gap-2 mb-4">
                       <button
-                        onClick={handleSolve}
-                        disabled={solveLoading || isLoading}
-                        className="flex-1 px-4 py-2 bg-[#8B4F47]/10 text-[#8B4F47] rounded-lg border border-[#8B4F47]/30 hover:bg-[#8B4F47]/20 transition-all duration-300 font-medium text-sm disabled:opacity-50"
+                        onClick={handleGetHint}
+                        disabled={hintLoading || isLoading}
+                        className="flex-1 px-4 py-2 bg-[#DAA520]/20 text-[#A67C4D] rounded-lg border border-[#DAA520]/40 hover:bg-[#DAA520]/30 transition-all duration-300 font-medium text-sm disabled:opacity-50"
                       >
-                        {solveLoading ? (
+                        {hintLoading ? (
                           <span className="flex items-center justify-center gap-2">
                             <span className="loading loading-spinner loading-xs"></span>
-                            Solving...
+                            Getting Hint...
                           </span>
                         ) : (
                           <span className="flex items-center justify-center gap-2">
-                            <Sparkles className="w-4 h-4" /> Show Answer
+                            <Lightbulb className="w-4 h-4" /> Get Hint
                           </span>
                         )}
                       </button>
-                    )}
+
+                      {solveEnabled && (
+                        <button
+                          onClick={handleSolve}
+                          disabled={solveLoading || isLoading}
+                          className="flex-1 px-4 py-2 bg-[#8B4F47]/10 text-[#8B4F47] rounded-lg border border-[#8B4F47]/30 hover:bg-[#8B4F47]/20 transition-all duration-300 font-medium text-sm disabled:opacity-50"
+                        >
+                          {solveLoading ? (
+                            <span className="flex items-center justify-center gap-2">
+                              <span className="loading loading-spinner loading-xs"></span>
+                              Solving...
+                            </span>
+                          ) : (
+                            <span className="flex items-center justify-center gap-2">
+                              <Sparkles className="w-4 h-4" /> Show Answer
+                            </span>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )
+              }
 
               {/* Input Area */}
               <div className="px-8 py-5 bg-gradient-to-t from-[#F5F1E8] to-white/50 border-t border-[#8B9D83]/20">
@@ -689,10 +729,10 @@ const Student: React.FC = () => {
                       <span>Send</span>
                     )}
                   </button>
+                  <p className="text-xs text-[#4A4A4A]/50 mt-2 text-center">
+                    Press Enter to send • Shift+Enter for new line
+                  </p>
                 </div>
-                <p className="text-xs text-[#4A4A4A]/50 mt-2 text-center">
-                  Press Enter to send • Shift+Enter for new line
-                </p>
               </div>
             </div>
           </div>
@@ -722,7 +762,7 @@ const Student: React.FC = () => {
           to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
-    </div>
+    </div >
   );
 };
 

@@ -392,6 +392,29 @@ async def auto_sync_lessons_to_student(student_id: int, student_assistant_id: st
                     if response.status_code == 200:
                         doc_data = response.json()
                         backboard_doc_id = doc_data.get("document_id")
+                        print(f"Uploaded lesson to student {student_id}'s assistant: {backboard_doc_id}")
+                        
+                        # POLL until indexed to prevent race conditions (fixes instant 400 error)
+                        import asyncio
+                        max_retries = 20
+                        for i in range(max_retries):
+                            print(f"Waiting for indexing... ({i+1}/{max_retries})")
+                            status_resp = await http_client.get(
+                                f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}/status",
+                                headers={"X-API-Key": BACKBOARD_API_KEY},
+                                timeout=30.0
+                            )
+                            if status_resp.status_code == 200:
+                                status_data = status_resp.json()
+                                status = status_data.get("status")
+                                if status == "indexed":
+                                    print("Lesson fully indexed and ready.")
+                                    break
+                                elif status == "error":
+                                    print("Indexing failed.")
+                                    # We proceed but user might get error
+                                    break
+                            await asyncio.sleep(1) # Wait 1s between checks
 
                         # Record in database
                         c.execute("""
@@ -439,7 +462,7 @@ async def get_available_lessons(authorization: Optional[str] = Header(None)):
             LEFT JOIN categories c ON f.category_id = c.id
             LEFT JOIN student_lessons sl ON f.id = sl.file_id AND sl.student_id = ?
             WHERE f.is_active = 1 
-            AND f.backboard_status IN ('indexed', 'processed', 'pending', 'retrying')
+            AND f.backboard_status IN ('indexed', 'processed', 'pending', 'processing', 'retrying')
             ORDER BY f.uploaded_at DESC
         """, (user_id,))
 
@@ -462,39 +485,7 @@ async def get_available_lessons(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/start-lesson/{file_id}")
-async def start_lesson(file_id: int, authorization: Optional[str] = Header(None)):
-    """Mark a lesson as started for the student."""
-    user_id = get_user_id_from_token(authorization) if authorization else None
-    
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Please log in!")
-    
-    try:
-        conn = sqlite3.connect('chat_history.db')
-        c = conn.cursor()
-        
-        # Verify file exists
-        c.execute("SELECT id FROM files WHERE id = ? AND is_active = 1", (file_id,))
-        if not c.fetchone():
-            conn.close()
-            raise HTTPException(status_code=404, detail="Lesson not found")
-        
-        # Check if already started
-        c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (user_id, file_id))
-        if c.fetchone():
-            conn.close()
-            return {"message": "Lesson already started", "file_id": file_id}
-        
-        # Create record
-        c.execute("INSERT INTO student_lessons (student_id, file_id) VALUES (?, ?)", (user_id, file_id))
-        conn.commit()
-        conn.close()
-        
-        return {"message": "Lesson started successfully", "file_id": file_id}
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.post("/chat")
@@ -590,6 +581,40 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)
             # Get teacher's custom instructions
             teacher_instructions = get_active_instructions()
 
+            # Retry logic for add_message to handle potential indexing race conditions
+            async def add_message_with_retry(thread_id, content, retries=3):
+                import asyncio
+                from backboard.exceptions import BackboardValidationError
+                
+                last_error = None
+                for i in range(retries):
+                    try:
+                        return await client.add_message(
+                            thread_id=thread_id,
+                            content=content,
+                            llm_provider="openai",
+                            model_name="gpt-4o",
+                            stream=True
+                        )
+                    except BackboardValidationError as e:
+                        if "HTTP 400" in str(e):
+                            print(f"Backboard 400 error (attempt {i+1}/{retries}). Waiting for indexing...")
+                            await asyncio.sleep(2 * (i + 1))  # Exponential backoff: 2s, 4s, 6s
+                            last_error = e
+                        else:
+                            raise e
+                    except Exception as e:
+                        # Also catch generic 400s that might be masked
+                        if "HTTP 400" in str(e):
+                            print(f"HTTP 400 error (attempt {i+1}/{retries}). Waiting for indexing...")
+                            await asyncio.sleep(2 * (i + 1))
+                            last_error = e
+                        else:
+                            raise e
+                
+                if last_error:
+                    raise last_error
+
             # 2. If this is the first message, generate a new story with structured output
             if is_first_message:
                 initial_prompt = f"""{SYSTEM_PROMPT}
@@ -606,12 +631,9 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
 
                 # Collect full response (no streaming for JSON)
                 full_response = ""
-                response_stream = await client.add_message(
+                response_stream = await add_message_with_retry(
                     thread_id=current_thread_id,
-                    content=initial_prompt,
-                    llm_provider="openai",
-                    model_name="gpt-4o",
-                    stream=True
+                    content=initial_prompt
                 )
                 async for chunk in response_stream:
                     if chunk.get('type') == 'content_streaming' and chunk.get('content'):
@@ -726,12 +748,9 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
 
                     # Collect full response
                     full_response = ""
-                    response_stream = await client.add_message(
+                    response_stream = await add_message_with_retry(
                         thread_id=current_thread_id,
-                        content=continuation_prompt,
-                        llm_provider="openai",
-                        model_name="gpt-4o",
-                        stream=True
+                        content=continuation_prompt
                     )
                     async for chunk in response_stream:
                         if chunk.get('type') == 'content_streaming' and chunk.get('content'):
@@ -906,6 +925,124 @@ async def get_my_lessons(current_user: User = Depends(get_current_user)):
     conn.close()
 
     return {"lessons": lessons}
+
+@router.post("/start-lesson/{file_id}")
+async def start_lesson(file_id: int, current_user: User = Depends(get_current_user)):
+    """Start a lesson - syncs the document to the student's assistant."""
+    if current_user.account_type != "student":
+        raise HTTPException(status_code=403, detail="Only students can start lessons")
+
+    # Get student info
+    conn = sqlite3.connect(ACCOUNTS_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id, assistant_id FROM accounts WHERE username = ?", (current_user.username,))
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    student_id = row["id"]
+    student_assistant_id = row["assistant_id"]
+
+    if not student_assistant_id:
+        raise HTTPException(status_code=400, detail="Student doesn't have an assistant. Please re-login.")
+
+    # Get file info
+    conn = sqlite3.connect('chat_history.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, file_path, original_filename, backboard_status
+        FROM files WHERE id = ? AND is_active = 1
+    """, (file_id,))
+    file_row = c.fetchone()
+
+    if not file_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lesson not found or not available")
+
+    # Check if already started
+    c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (student_id, file_id))
+    existing = c.fetchone()
+
+    if existing:
+        # Already started, just update last_accessed
+        c.execute("UPDATE student_lessons SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?", (existing["id"],))
+        conn.commit()
+        conn.close()
+        return {"message": "Lesson already started", "lesson_id": existing["id"]}
+
+    # Upload document to student's assistant
+    file_path = Path(file_row["file_path"])
+    if not file_path.exists():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lesson file not found on server")
+
+    # Read file content
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+
+    # Upload to student's assistant
+    backboard_doc_id = None
+    try:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.post(
+                f"{BACKBOARD_BASE_URL}/assistants/{student_assistant_id}/documents",
+                headers={"X-API-Key": BACKBOARD_API_KEY},
+                files={"file": (file_row["original_filename"], file_content)},
+                timeout=60.0
+            )
+            if response.status_code == 200:
+                doc_data = response.json()
+                backboard_doc_id = doc_data.get("document_id")
+                print(f"Uploaded lesson to student {student_id}'s assistant: {backboard_doc_id}")
+                
+                # POLL until indexed to prevent race conditions (fixes instant 400 error)
+                import asyncio
+                max_retries = 20
+                for i in range(max_retries):
+                    print(f"Waiting for indexing... ({i+1}/{max_retries})")
+                    status_resp = await http_client.get(
+                        f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}/status",
+                        headers={"X-API-Key": BACKBOARD_API_KEY},
+                        timeout=30.0
+                    )
+                    if status_resp.status_code == 200:
+                        status_data = status_resp.json()
+                        status = status_data.get("status")
+                        if status == "indexed":
+                            print("Lesson fully indexed and ready.")
+                            break
+                        elif status == "error":
+                            print("Indexing failed.")
+                            # We proceed but user might get error
+                            break
+                    await asyncio.sleep(1) # Wait 1s between checks
+            else:
+                print(f"Failed to upload lesson: {response.status_code} - {response.text}")
+                conn.close()
+                raise HTTPException(status_code=500, detail="Failed to sync lesson to your learning assistant")
+    except httpx.RequestError as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
+
+    # Record the started lesson
+    c.execute("""
+        INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
+        VALUES (?, ?, ?)
+    """, (student_id, file_id, backboard_doc_id))
+    lesson_id = c.lastrowid
+    conn.commit()
+    conn.close()
+
+    return {
+        "message": "Lesson started successfully!",
+        "lesson_id": lesson_id,
+        "backboard_doc_id": backboard_doc_id
+    }
+
 
 @router.get("/conversations/lesson/{file_id}")
 async def get_conversation_for_lesson(file_id: int, current_user: User = Depends(get_current_user)):
