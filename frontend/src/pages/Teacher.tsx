@@ -142,6 +142,7 @@ const Teacher: React.FC = () => {
       });
       if (response.ok) {
         const data = await response.json();
+        console.log('Student chats received:', data);
         setStudentConversations(data.conversations || []);
         const modal = document.getElementById('chat_modal') as HTMLDialogElement;
         if (modal) modal.showModal();
@@ -1144,8 +1145,8 @@ const Teacher: React.FC = () => {
                       key={conv.id}
                       onClick={() => setSelectedConvId(conv.id)}
                       className={`w-full text-left p-3 rounded-lg transition-all ${selectedConvId === conv.id
-                          ? 'bg-[#8B9D83] text-white'
-                          : 'bg-white hover:bg-[#8B9D83]/10'
+                        ? 'bg-[#8B9D83] text-white'
+                        : 'bg-white hover:bg-[#8B9D83]/10'
                         }`}
                     >
                       <div className="flex justify-between items-center">
@@ -1183,10 +1184,10 @@ const Teacher: React.FC = () => {
                         </div>
                         <div
                           className={`chat-bubble text-sm whitespace-pre-wrap ${msg.role === 'user'
-                              ? msg.is_wrong
-                                ? 'bg-red-100 text-red-900'
-                                : 'bg-[#8B9D83]/20 text-[#4A4A4A]'
-                              : 'bg-[#8B4F47]/10 text-[#4A4A4A]'
+                            ? msg.is_wrong
+                              ? 'bg-red-100 text-red-900'
+                              : 'bg-[#8B9D83]/20 text-[#4A4A4A]'
+                            : 'bg-[#8B4F47]/10 text-[#4A4A4A]'
                             }`}
                         >
                           {msg.content}

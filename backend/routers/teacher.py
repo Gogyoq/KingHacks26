@@ -1137,54 +1137,6 @@ async def get_all_student_conversations(current_user: User = Depends(get_current
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/students/{student_id}/conversations")
-async def get_student_conversations(student_id: int, current_user: User = Depends(get_current_user)):
-    """
-    Get all conversations for a specific student. Teachers only.
-    """
-    if current_user.account_type != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can view student conversations")
-
-    try:
-        # Get student info
-        accounts_conn = sqlite3.connect(ACCOUNTS_DB_PATH)
-        accounts_conn.row_factory = sqlite3.Row
-        ac = accounts_conn.cursor()
-        ac.execute("SELECT username, full_name FROM accounts WHERE id = ? AND account_type = 'student'", (student_id,))
-        student = ac.fetchone()
-        accounts_conn.close()
-
-        if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
-
-        # Get conversations
-        conn = sqlite3.connect('chat_history.db')
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-
-        c.execute("""
-            SELECT id, thread_id, started_at, last_message_at, has_wrong_answers
-            FROM student_conversations
-            WHERE student_id = ?
-            ORDER BY last_message_at DESC
-        """, (student_id,))
-        
-        conversations = [dict(row) for row in c.fetchall()]
-        conn.close()
-
-        return {
-            "student": {
-                "id": student_id,
-                "username": student['username'],
-                "full_name": student['full_name']
-            },
-            "conversations": conversations
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/{conversation_id}/messages")
 async def get_conversation_messages(conversation_id: int, current_user: User = Depends(get_current_user)):
@@ -1634,6 +1586,10 @@ async def get_student_conversations(student_id: int, current_user: User = Depend
             conv['messages'] = [dict(row) for row in c.fetchall()]
         
         conn.close()
+
+        # Debug: log what we're returning
+        for conv in conversations:
+            print(f"API returning conv {conv['id']} with {len(conv.get('messages', []))} messages")
 
         return {"conversations": conversations}
 
