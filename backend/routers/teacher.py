@@ -10,6 +10,12 @@ import os
 from typing import Optional
 from dotenv import load_dotenv
 from utils import convert_document_to_markdown, can_convert
+import json
+try:
+    from backboard import BackboardClient
+except ImportError:
+    print("Warning: backboard-sdk not found, AI insights will be disabled")
+    BackboardClient = None
 
 load_dotenv()
 
@@ -1459,14 +1465,119 @@ async def get_student_ai_insights(student_id: int, current_user: User = Depends(
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
 
-        # For now, return fallback insights
-        # In the future, this would call Backboard API for AI analysis
-        insights = {
-            "struggles": "Unable to analyze - insufficient data",
-            "strengths": "Student is actively engaging with lessons",
-            "recommendations": "Continue monitoring progress\nReview recent wrong answers",
-            "suggested_focus": "Practice with current difficulty level"
-        }
+        # Get student's recent conversation messages (last 20 exchanges)
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT cm.role, cm.content, cm.is_wrong, cm.difficulty
+            FROM conversation_messages cm
+            JOIN student_conversations sc ON cm.conversation_id = sc.id
+            WHERE sc.student_id = ?
+            ORDER BY cm.created_at DESC
+            LIMIT 40
+        """, (student_id,))
+        messages = c.fetchall()
+
+        # Get performance stats
+        c.execute("""
+            SELECT
+                COUNT(CASE WHEN cm.content != 'Start my lesson' THEN 1 END) as total_answers,
+                SUM(CASE WHEN cm.is_wrong = 1 THEN 1 ELSE 0 END) as wrong_answers
+            FROM conversation_messages cm
+            JOIN student_conversations sc ON cm.conversation_id = sc.id
+            WHERE sc.student_id = ? AND cm.role = 'user'
+        """, (student_id,))
+        stats = c.fetchone()
+        conn.close()
+
+        total = stats['total_answers'] or 0
+        wrong = stats['wrong_answers'] or 0
+        accuracy = round(((total - wrong) / total * 100), 1) if total > 0 else 0
+
+        # Format conversation history for AI analysis
+        conversation_summary = []
+        for msg in reversed(messages):
+            role_label = "Student" if msg['role'] == 'user' else "Tutor"
+            wrong_marker = " [INCORRECT]" if msg['is_wrong'] else ""
+            difficulty_marker = f" (difficulty: {msg['difficulty']})" if msg['difficulty'] else ""
+            conversation_summary.append(f"{role_label}{wrong_marker}{difficulty_marker}: {msg['content'][:200]}")
+
+        conversation_text = "\n".join(conversation_summary[-20:])  # Last 20 messages
+
+        # Use Backboard to analyze and generate insights
+        if BackboardClient and student['assistant_id']:
+            analysis_prompt = f"""You are an educational analyst helping a teacher understand a student's learning progress.
+
+Student: {student['full_name']} ({student['username']})
+Overall Accuracy: {accuracy}%
+Total Questions Answered: {total}
+Wrong Answers: {wrong}
+
+Recent conversation history:
+{conversation_text}
+
+Based on this data, provide a concise analysis in this exact JSON format:
+{{
+    "struggles": "Brief description of what topics/concepts the student is struggling with (1-2 sentences)",
+    "strengths": "What the student is doing well (1 sentence)",
+    "recommendations": "Specific actionable recommendations for the teacher (2-3 bullet points)",
+    "suggested_focus": "One specific topic or skill to focus on next"
+}}
+
+Be specific and actionable. Reference actual patterns you see in the conversation."""
+
+            try:
+                client = BackboardClient(BACKBOARD_API_KEY)
+                
+                # Create a temporary thread for analysis
+                thread = await client.create_thread(student['assistant_id'])
+                
+                full_response = ""
+                response_stream = await client.add_message(
+                    thread_id=str(thread.thread_id),
+                    content=analysis_prompt,
+                    llm_provider="openai",
+                    model_name="gpt-4o",
+                    stream=True
+                )
+                async for chunk in response_stream:
+                    if chunk.get('type') == 'content_streaming' and chunk.get('content'):
+                        full_response += chunk['content']
+                    elif chunk.get('type') == 'message_complete':
+                        break
+                
+                # Parse AI response
+                try:
+                    json_start = full_response.find('{')
+                    json_end = full_response.rfind('}') + 1
+                    if json_start >= 0 and json_end > json_start:
+                        insights = json.loads(full_response[json_start:json_end])
+                    else:
+                        insights = json.loads(full_response)
+                except json.JSONDecodeError:
+                    insights = {
+                        "struggles": "Unable to parse AI analysis",
+                        "strengths": "Data collected successfully",
+                        "recommendations": "Review raw chat logs manually",
+                        "suggested_focus": "N/A"
+                    }
+            except Exception as e:
+                print(f"AI Analysis failed: {e}")
+                insights = {
+                    "struggles": "AI analysis unavailable",
+                    "strengths": "N/A", 
+                    "recommendations": f"Error: {str(e)}",
+                    "suggested_focus": "N/A"
+                }
+        else:
+             insights = {
+                "struggles": "AI analysis not configured",
+                "strengths": "N/A",
+                "recommendations": "Check Backboard SDK configuration",
+                "suggested_focus": "N/A"
+            }
 
         return {
             "student": {
@@ -1475,9 +1586,9 @@ async def get_student_ai_insights(student_id: int, current_user: User = Depends(
                 "full_name": student['full_name']
             },
             "stats": {
-                "total_answers": 0,
-                "wrong_answers": 0,
-                "accuracy_percent": 0
+                "total_answers": total,
+                "wrong_answers": wrong,
+                "accuracy_percent": accuracy
             },
             "insights": insights
         }

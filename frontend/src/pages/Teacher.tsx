@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, FileText, Settings, Users, Calendar, TrendingUp, AlertCircle, Upload, FolderPlus, Tag, Trash2, Eye, EyeOff, CheckCircle, Clock, XCircle, AlertTriangle, FolderOpen, Plus, X, ToggleLeft, ToggleRight } from 'lucide-react';
+import { BarChart3, FileText, Settings, Users, Calendar, TrendingUp, AlertCircle, Upload, FolderPlus, Tag, Trash2, Eye, EyeOff, CheckCircle, Clock, XCircle, AlertTriangle, FolderOpen, Plus, X, ToggleLeft, ToggleRight, Brain } from 'lucide-react';
 
 // Interfaces
 interface File {
@@ -97,6 +97,33 @@ const Teacher: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [fileStatusPolling]);
+
+  // Insights State
+  const [analyzingStudentId, setAnalyzingStudentId] = useState<number | null>(null);
+  const [insightData, setInsightData] = useState<any>(null);
+
+  const fetchStudentInsights = async (studentId: number) => {
+    setAnalyzingStudentId(studentId);
+    setInsightData(null);
+    try {
+      const response = await fetch(`http://localhost:8000/teacher/dashboard/student/${studentId}/ai-insights`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setInsightData(data);
+        const modal = document.getElementById('insights_modal') as HTMLDialogElement;
+        if (modal) modal.showModal();
+      } else {
+        alert("Failed to analyze student data");
+      }
+    } catch (error) {
+      console.error('Failed to fetch insights:', error);
+      alert("Error analyzing student data");
+    } finally {
+      setAnalyzingStudentId(null);
+    }
+  };
 
   // API calls
   const getToken = () => localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
@@ -582,6 +609,7 @@ const Teacher: React.FC = () => {
                         <th className="text-center py-3 px-4 font-semibold text-[#4A4A4A]">Accuracy</th>
                         <th className="text-left py-3 px-4 font-semibold text-[#4A4A4A]">Last Active</th>
                         <th className="text-center py-3 px-4 font-semibold text-[#4A4A4A]">Status</th>
+                        <th className="text-center py-3 px-4 font-semibold text-[#4A4A4A]">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -613,6 +641,20 @@ const Teacher: React.FC = () => {
                               {student.status === 'good' ? <CheckCircle size={14} /> : student.status === 'warning' ? <Clock size={14} /> : <AlertCircle size={14} />}
                               {student.status === 'good' ? 'Good' : student.status === 'warning' ? 'Fair' : 'Needs Help'}
                             </span>
+                          </td>
+                          <td className="text-center py-4 px-4">
+                            <button
+                              onClick={() => fetchStudentInsights(student.student_id)}
+                              disabled={analyzingStudentId === student.student_id}
+                              className="btn btn-sm btn-ghost text-[#8B4F47] hover:bg-[#8B4F47]/10 gap-2"
+                            >
+                              {analyzingStudentId === student.student_id ? (
+                                <span className="loading loading-spinner loading-xs"></span>
+                              ) : (
+                                <Brain size={16} />
+                              )}
+                              Analyze
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -938,6 +980,92 @@ const Teacher: React.FC = () => {
           </div>
         )}
       </div>
+      {/* Insights Modal */}
+      <dialog id="insights_modal" className="modal">
+        <div className="modal-box w-11/12 max-w-4xl bg-[#FDFBF7] text-[#4A4A4A]">
+          <form method="dialog">
+            <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+          </form>
+
+          {insightData && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 border-b border-[#8B9D83]/20 pb-4">
+                <Brain className="w-8 h-8 text-[#8B4F47]" />
+                <div>
+                  <h3 className="font-bold text-2xl text-[#8B4F47]">AI Progress Analysis</h3>
+                  <p className="text-[#4A4A4A]/60">Insights for {insightData.student.full_name} (@{insightData.student.username})</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="stat bg-white rounded-xl shadow-sm border border-[#8B9D83]/10">
+                  <div className="stat-title text-[#4A4A4A]/60">Total Answered</div>
+                  <div className="stat-value text-[#4A4A4A]">{insightData.stats.total_answers}</div>
+                </div>
+                <div className="stat bg-white rounded-xl shadow-sm border border-[#8B9D83]/10">
+                  <div className="stat-title text-[#4A4A4A]/60">Accuracy</div>
+                  <div className={`stat-value ${insightData.stats.accuracy_percent >= 70 ? 'text-green-600' :
+                      insightData.stats.accuracy_percent >= 50 ? 'text-yellow-600' : 'text-red-600'
+                    }`}>{insightData.stats.accuracy_percent}%</div>
+                </div>
+                <div className="stat bg-white rounded-xl shadow-sm border border-[#8B9D83]/10">
+                  <div className="stat-title text-[#4A4A4A]/60">Areas to Improve</div>
+                  <div className="stat-value text-[#8B4F47]">{insightData.stats.wrong_answers}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-green-50 rounded-xl p-5 border border-green-100">
+                  <h4 className="font-bold text-green-800 flex items-center gap-2 mb-3">
+                    <CheckCircle className="w-5 h-5" /> Strengths
+                  </h4>
+                  <p className="text-green-900/80 leading-relaxed">
+                    {insightData.insights.strengths}
+                  </p>
+                </div>
+
+                <div className="bg-red-50 rounded-xl p-5 border border-red-100">
+                  <h4 className="font-bold text-red-800 flex items-center gap-2 mb-3">
+                    <AlertCircle className="w-5 h-5" /> Struggles
+                  </h4>
+                  <p className="text-red-900/80 leading-relaxed">
+                    {insightData.insights.struggles}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-[#8B4F47]/5 rounded-xl p-6 border border-[#8B4F47]/10">
+                <h4 className="font-bold text-[#8B4F47] flex items-center gap-2 mb-4">
+                  <Brain className="w-5 h-5" /> Support Recommendations
+                </h4>
+                <div className="space-y-4">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#4A4A4A]/50">Suggested Focus</span>
+                    <p className="font-medium text-[#4A4A4A] mt-1">{insightData.insights.suggested_focus}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#4A4A4A]/50">Action Items</span>
+                    <ul className="mt-2 space-y-2">
+                      {Array.isArray(insightData.insights.recommendations)
+                        ? insightData.insights.recommendations.map((rec: string, i: number) => (
+                          <li key={i} className="flex items-start gap-2 text-[#4A4A4A]/80">
+                            <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#8B4F47] flex-shrink-0" />
+                            {rec}
+                          </li>
+                        ))
+                        : <li className="text-[#4A4A4A]/80">{insightData.insights.recommendations}</li>
+                      }
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <form method="dialog" className="modal-backdrop">
+          <button>close</button>
+        </form>
+      </dialog>
     </div>
   );
 };
