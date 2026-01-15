@@ -424,6 +424,7 @@ const Teacher: React.FC = () => {
   const renderBackboardStatus = (file: File) => {
     const statusConfig = {
       'processed': { color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircle, text: 'Ready' },
+      'indexed': { color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircle, text: 'Ready' },
       'pending': { color: 'text-yellow-600', bg: 'bg-yellow-100', icon: Clock, text: 'Processing' },
       'processing': { color: 'text-yellow-600', bg: 'bg-yellow-100', icon: Clock, text: 'Processing' },
       'retrying': { color: 'text-blue-600', bg: 'bg-blue-100', icon: Clock, text: 'Retrying' },
