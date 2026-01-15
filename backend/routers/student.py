@@ -1076,7 +1076,6 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
     }
 
 
->>>>>>> fixinglessons
 @router.get("/conversations/lesson/{file_id}")
 async def get_conversation_for_lesson(file_id: int, current_user: User = Depends(get_current_user)):
     """Get the most recent conversation (including ended) for a specific lesson."""
