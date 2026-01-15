@@ -485,39 +485,7 @@ async def get_available_lessons(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/start-lesson/{file_id}")
-async def start_lesson(file_id: int, authorization: Optional[str] = Header(None)):
-    """Mark a lesson as started for the student."""
-    user_id = get_user_id_from_token(authorization) if authorization else None
-    
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Please log in!")
-    
-    try:
-        conn = sqlite3.connect('chat_history.db')
-        c = conn.cursor()
-        
-        # Verify file exists
-        c.execute("SELECT id FROM files WHERE id = ? AND is_active = 1", (file_id,))
-        if not c.fetchone():
-            conn.close()
-            raise HTTPException(status_code=404, detail="Lesson not found")
-        
-        # Check if already started
-        c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (user_id, file_id))
-        if c.fetchone():
-            conn.close()
-            return {"message": "Lesson already started", "file_id": file_id}
-        
-        # Create record
-        c.execute("INSERT INTO student_lessons (student_id, file_id) VALUES (?, ?)", (user_id, file_id))
-        conn.commit()
-        conn.close()
-        
-        return {"message": "Lesson started successfully", "file_id": file_id}
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.post("/chat")
