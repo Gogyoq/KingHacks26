@@ -217,6 +217,7 @@ async def get_backboard_status(file_id: int, authorization: Optional[str] = Head
             if response.status_code == 200:
                 status_data = response.json()
                 new_status = status_data.get("status", "unknown")
+                print(f"Checking file {file_id}: Backboard status is '{new_status}'")
 
                 current_status = row["backboard_status"]
 
