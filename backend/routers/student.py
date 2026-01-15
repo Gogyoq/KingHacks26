@@ -462,7 +462,7 @@ async def get_available_lessons(authorization: Optional[str] = Header(None)):
             LEFT JOIN categories c ON f.category_id = c.id
             LEFT JOIN student_lessons sl ON f.id = sl.file_id AND sl.student_id = ?
             WHERE f.is_active = 1 
-            AND f.backboard_status IN ('indexed', 'processed', 'pending', 'retrying')
+            AND f.backboard_status IN ('indexed', 'processed', 'pending', 'processing', 'retrying')
             ORDER BY f.uploaded_at DESC
         """, (user_id,))
 

@@ -144,8 +144,8 @@ const Teacher: React.FC = () => {
       if (response.ok) {
         const data = await response.json();
         setFiles(data.files || []);
-        
-        const pending = data.files.filter((f: File) => 
+
+        const pending = data.files.filter((f: File) =>
           f.backboard_status === 'pending' || f.backboard_status === 'retrying'
         ).map((f: File) => f.id);
         setFileStatusPolling(new Set(pending));
@@ -198,10 +198,10 @@ const Teacher: React.FC = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        
-        setFiles(prev => prev.map(f => 
-          f.id === fileId 
-            ? { ...f, backboard_status: data.status, backboard_doc_id: data.backboard_doc_id } 
+
+        setFiles(prev => prev.map(f =>
+          f.id === fileId
+            ? { ...f, backboard_status: data.status, backboard_doc_id: data.backboard_doc_id }
             : f
         ));
 
@@ -330,7 +330,7 @@ const Teacher: React.FC = () => {
   };
 
   const handleToggleActive = async (fileId: number, isActive: boolean) => {
-    const endpoint = isActive 
+    const endpoint = isActive
       ? `http://localhost:8000/teacher/files/${fileId}/deactivate`
       : `http://localhost:8000/teacher/files/${fileId}/activate`;
 
@@ -425,6 +425,7 @@ const Teacher: React.FC = () => {
     const statusConfig = {
       'processed': { color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircle, text: 'Ready' },
       'pending': { color: 'text-yellow-600', bg: 'bg-yellow-100', icon: Clock, text: 'Processing' },
+      'processing': { color: 'text-yellow-600', bg: 'bg-yellow-100', icon: Clock, text: 'Processing' },
       'retrying': { color: 'text-blue-600', bg: 'bg-blue-100', icon: Clock, text: 'Retrying' },
       'error': { color: 'text-red-600', bg: 'bg-red-100', icon: XCircle, text: 'Error' },
       'conversion_failed': { color: 'text-red-600', bg: 'bg-red-100', icon: XCircle, text: 'Failed' },
@@ -468,33 +469,30 @@ const Teacher: React.FC = () => {
           <div className="flex gap-2">
             <button
               onClick={() => setActiveTab('dashboard')}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
-                activeTab === 'dashboard'
+              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'dashboard'
                   ? 'bg-[#8B4F47] text-white shadow-md'
                   : 'text-[#4A4A4A] hover:bg-[#8B9D83]/10'
-              }`}
+                }`}
             >
               <BarChart3 size={20} />
               Dashboard
             </button>
             <button
               onClick={() => setActiveTab('files')}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
-                activeTab === 'files'
+              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'files'
                   ? 'bg-[#8B4F47] text-white shadow-md'
                   : 'text-[#4A4A4A] hover:bg-[#8B9D83]/10'
-              }`}
+                }`}
             >
               <FileText size={20} />
               Learning Materials
             </button>
             <button
               onClick={() => setActiveTab('config')}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
-                activeTab === 'config'
+              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'config'
                   ? 'bg-[#8B4F47] text-white shadow-md'
                   : 'text-[#4A4A4A] hover:bg-[#8B9D83]/10'
-              }`}
+                }`}
             >
               <Settings size={20} />
               AI Settings
@@ -596,11 +594,10 @@ const Teacher: React.FC = () => {
                           </td>
                           <td className="text-center py-4 px-4 text-[#4A4A4A]">{student.total_sessions}</td>
                           <td className="text-center py-4 px-4">
-                            <span className={`font-semibold ${
-                              student.accuracy_percent >= 70 ? 'text-green-600' :
-                              student.accuracy_percent >= 50 ? 'text-yellow-600' :
-                              'text-red-600'
-                            }`}>
+                            <span className={`font-semibold ${student.accuracy_percent >= 70 ? 'text-green-600' :
+                                student.accuracy_percent >= 50 ? 'text-yellow-600' :
+                                  'text-red-600'
+                              }`}>
                               {student.accuracy_percent}%
                             </span>
                           </td>
@@ -608,11 +605,10 @@ const Teacher: React.FC = () => {
                             {student.last_active ? new Date(student.last_active).toLocaleString() : 'Never'}
                           </td>
                           <td className="text-center py-4 px-4">
-                            <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold ${
-                              student.status === 'good' ? 'bg-green-100 text-green-700' :
-                              student.status === 'warning' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-red-100 text-red-700'
-                            }`}>
+                            <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold ${student.status === 'good' ? 'bg-green-100 text-green-700' :
+                                student.status === 'warning' ? 'bg-yellow-100 text-yellow-700' :
+                                  'bg-red-100 text-red-700'
+                              }`}>
                               {student.status === 'good' ? <CheckCircle size={14} /> : student.status === 'warning' ? <Clock size={14} /> : <AlertCircle size={14} />}
                               {student.status === 'good' ? 'Good' : student.status === 'warning' ? 'Fair' : 'Needs Help'}
                             </span>
@@ -747,22 +743,20 @@ const Teacher: React.FC = () => {
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={() => handleToggleActive(file.id, file.is_active)}
-                                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                                  file.is_active
+                                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${file.is_active
                                     ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                }`}
+                                  }`}
                               >
                                 {file.is_active ? <Eye size={16} /> : <EyeOff size={16} />}
                                 {file.is_active ? 'Active' : 'Inactive'}
                               </button>
                               <button
                                 onClick={() => handleToggleSolve(file.id)}
-                                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                                  file.solve_enabled
+                                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${file.solve_enabled
                                     ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                }`}
+                                  }`}
                                 title={file.solve_enabled ? 'Students can see answers' : 'Answer button disabled'}
                               >
                                 {file.solve_enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
@@ -817,22 +811,20 @@ const Teacher: React.FC = () => {
                             </select>
                             <button
                               onClick={() => handleToggleActive(file.id, file.is_active)}
-                              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                                file.is_active
+                              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${file.is_active
                                   ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                              }`}
+                                }`}
                             >
                               {file.is_active ? <Eye size={16} /> : <EyeOff size={16} />}
                               {file.is_active ? 'Active' : 'Inactive'}
                             </button>
                             <button
                               onClick={() => handleToggleSolve(file.id)}
-                              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                                file.solve_enabled
+                              className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${file.solve_enabled
                                   ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                              }`}
+                                }`}
                             >
                               {file.solve_enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                               Solve
@@ -905,11 +897,10 @@ const Teacher: React.FC = () => {
               ) : (
                 <div className="space-y-3">
                   {instructions.map((inst) => (
-                    <div key={inst.id} className={`bg-white rounded-xl p-4 border-2 transition-all ${
-                      inst.is_active 
-                        ? 'border-[#8B9D83] shadow-md' 
+                    <div key={inst.id} className={`bg-white rounded-xl p-4 border-2 transition-all ${inst.is_active
+                        ? 'border-[#8B9D83] shadow-md'
                         : 'border-[#8B9D83]/20 opacity-60'
-                    }`}>
+                      }`}>
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1">
                           <h3 className="font-bold text-[#4A4A4A] mb-2">{inst.instruction_name}</h3>
@@ -921,11 +912,10 @@ const Teacher: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => handleToggleInstruction(inst.id)}
-                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${
-                              inst.is_active
+                            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-1 ${inst.is_active
                                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
+                              }`}
                           >
                             {inst.is_active ? <CheckCircle size={16} /> : <XCircle size={16} />}
                             {inst.is_active ? 'Active' : 'Inactive'}
