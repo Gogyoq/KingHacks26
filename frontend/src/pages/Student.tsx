@@ -131,7 +131,7 @@ const Student: React.FC = () => {
         const data = await response.json();
         const fetchedLessons = data.lessons || [];
         setLessons(fetchedLessons);
-        
+
         // Auto-select the first started lesson when student logs in
         if (selectedLessonId === null && fetchedLessons.length > 0) {
           const firstStartedLesson = fetchedLessons.find((l: Lesson) => l.started);
@@ -215,8 +215,12 @@ const Student: React.FC = () => {
   };
 
   // Start a new chat session automatically
-  const handleStartChat = async () => {
-    if (!selectedLessonId || isLoading || isChatEnded) return;
+  const handleStartChat = async (retryCount = 0) => {
+    if ((!selectedLessonId || isLoading || isChatEnded) && retryCount === 0) return;
+
+    // Max retries for indexing race condition
+    const MAX_RETRIES = 5;
+    let shouldRetry = false;
 
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
     if (!token) {
@@ -224,10 +228,11 @@ const Student: React.FC = () => {
       return;
     }
 
-    setIsLoading(true);
-
-    // Add placeholder for bot response
-    setChatLog([{ role: 'bot', content: '' }]);
+    if (retryCount === 0) {
+      setIsLoading(true);
+      // Add placeholder for bot response only on first attempt
+      setChatLog([{ role: 'bot', content: '' }]);
+    }
 
     try {
       const response = await fetch('http://localhost:8000/student/chat', {
@@ -279,17 +284,40 @@ const Student: React.FC = () => {
                 setChatStarted(true);
               } else if (data.type === 'error') {
                 console.error('Error from server:', data.error);
+
+                // Check for HTTP 400 (Backboard indexing race condition)
+                if (data.error.includes('HTTP 400') && retryCount < MAX_RETRIES) {
+                  console.log(`Hit indexing race condition, retrying... (${retryCount + 1}/${MAX_RETRIES})`);
+                  setChatLog([{ role: 'bot', content: `Preparing your lesson... please wait (${retryCount + 1})...` }]);
+
+                  shouldRetry = true;
+                  break; // Break the inner loop, handling retry outside
+                }
+
                 setChatLog([{ role: 'bot', content: `Error: ${data.error}` }]);
               }
             }
           }
+          // Break outer loop if retrying
+          if (shouldRetry) break;
         }
       }
+
+      if (shouldRetry) {
+        // Exponential backoff: 2s, 4s, 8s...
+        const waitTime = 2000 * Math.pow(1.5, retryCount);
+        setTimeout(() => handleStartChat(retryCount + 1), waitTime);
+      }
+
     } catch (err) {
       console.error('Start chat failed', err);
+      // Also retry on network failures if needed, but primarily focusing on the 400 error
       setChatLog([{ role: 'bot', content: 'Error: Failed to start lesson' }]);
     } finally {
-      setIsLoading(false);
+      // Only turn off loading if NOT retrying
+      if (!shouldRetry) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -403,7 +431,7 @@ const Student: React.FC = () => {
 
     // Get auth token if available
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-    
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -438,11 +466,11 @@ const Student: React.FC = () => {
 
           const chunk = decoder.decode(value);
           const lines = chunk.split('\n');
-          
+
           for (const line of lines) {
             if (line.startsWith('data: ')) {
               const data = JSON.parse(line.slice(6));
-              
+
               if (data.type === 'thread_id') {
                 setThreadId(data.thread_id);
                 if (data.conversation_id) {
@@ -450,7 +478,7 @@ const Student: React.FC = () => {
                 }
               } else if (data.type === 'content') {
                 accumulatedContent += data.content;
-                
+
                 // Update the bot message in real-time
                 setChatLog(prevLog => {
                   const updatedLog = [...prevLog];
@@ -459,14 +487,14 @@ const Student: React.FC = () => {
                 });
               } else if (data.type === 'done') {
                 if (data.thread_id) {
-                    setThreadId(data.thread_id);
+                  setThreadId(data.thread_id);
                 }
               } else if (data.type === 'error') {
                 console.error('Error from server:', data.error);
                 setChatLog(prevLog => {
-                    const updatedLog = [...prevLog];
-                    updatedLog[botMessageIndex] = { role: 'bot', content: `Error: ${data.error}` };
-                    return updatedLog;
+                  const updatedLog = [...prevLog];
+                  updatedLog[botMessageIndex] = { role: 'bot', content: `Error: ${data.error}` };
+                  return updatedLog;
                 });
               }
             }
@@ -524,13 +552,12 @@ const Student: React.FC = () => {
                       )}
                     </div>
                     <button
-                      className={`btn btn-sm ml-2 ${
-                        lesson.started
+                      className={`btn btn-sm ml-2 ${lesson.started
                           ? selectedLessonId === lesson.id
                             ? 'btn-primary'
                             : 'btn-success'
                           : 'btn-primary'
-                      }`}
+                        }`}
                       onClick={() => {
                         handleLessonSelect(lesson.id, lesson.started);
                       }}
@@ -556,46 +583,45 @@ const Student: React.FC = () => {
       <div className="card bg-base-200 shadow-xl flex-1 mb-4 overflow-hidden flex flex-col">
         <div className="card-body p-4 flex flex-col h-full">
           <h2 className="card-title text-primary mb-2">Story Chat</h2>
-          
+
           <div className="flex-1 overflow-y-auto space-y-4 pr-2">
             {chatLog.length === 0 && selectedLessonId && (
-                <div className="text-center text-gray-500 mt-10">
-                    <p className="mb-4">Ready to start learning?</p>
-                    <button
-                      className="btn btn-primary btn-lg"
-                      onClick={handleStartChat}
-                      disabled={isLoading || isChatEnded}
-                    >
-                      {isLoading ? (
-                        <>
-                          <span className="loading loading-spinner loading-sm"></span>
-                          Starting...
-                        </>
-                      ) : (
-                        'Start Lesson'
-                      )}
-                    </button>
-                </div>
+              <div className="text-center text-gray-500 mt-10">
+                <p className="mb-4">Ready to start learning?</p>
+                <button
+                  className="btn btn-primary btn-lg"
+                  onClick={handleStartChat}
+                  disabled={isLoading || isChatEnded}
+                >
+                  {isLoading ? (
+                    <>
+                      <span className="loading loading-spinner loading-sm"></span>
+                      Starting...
+                    </>
+                  ) : (
+                    'Start Lesson'
+                  )}
+                </button>
+              </div>
             )}
 
             {chatLog.length === 0 && !selectedLessonId && (
-                <div className="text-center text-gray-500 mt-10">
-                    <p>Select a lesson above to begin!</p>
-                </div>
+              <div className="text-center text-gray-500 mt-10">
+                <p>Select a lesson above to begin!</p>
+              </div>
             )}
-            
+
             {chatLog.map((log, i) => (
               <div key={i} className={`chat ${log.role === 'user' ? 'chat-end' : 'chat-start'}`}>
                 <div className="chat-header opacity-50 text-xs mb-1">
                   {log.role === 'user' ? 'You' : 'StoryBot'}
                 </div>
-                <div className={`chat-bubble ${
-                  log.role === 'user' 
-                    ? 'chat-bubble-primary' 
-                    : log.isWrong 
-                      ? 'chat-bubble-error' 
+                <div className={`chat-bubble ${log.role === 'user'
+                    ? 'chat-bubble-primary'
+                    : log.isWrong
+                      ? 'chat-bubble-error'
                       : 'chat-bubble-secondary'
-                }`}>
+                  }`}>
                   {log.content}
                 </div>
               </div>
