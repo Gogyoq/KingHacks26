@@ -1599,3 +1599,43 @@ Be specific and actionable. Reference actual patterns you see in the conversatio
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/students/{student_id}/conversations")
+async def get_student_conversations(student_id: int, current_user: User = Depends(get_current_user)):
+    """
+    Get all conversations for a specific student. Teachers only.
+    """
+    if current_user.account_type != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can view student conversations")
+
+    try:
+        conn = sqlite3.connect('chat_history.db')
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+
+        # Get conversations
+        c.execute("""
+            SELECT id, started_at, last_message_at, has_wrong_answers, thread_id
+            FROM student_conversations
+            WHERE student_id = ?
+            ORDER BY last_message_at DESC
+        """, (student_id,))
+        conversations = [dict(row) for row in c.fetchall()]
+
+        # For each conversation, fetch messages
+        for conv in conversations:
+            c.execute("""
+                SELECT id, role, content, is_wrong, created_at, difficulty
+                FROM conversation_messages
+                WHERE conversation_id = ?
+                ORDER BY created_at ASC
+            """, (conv['id'],))
+            conv['messages'] = [dict(row) for row in c.fetchall()]
+        
+        conn.close()
+
+        return {"conversations": conversations}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

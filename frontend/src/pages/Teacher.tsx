@@ -125,6 +125,36 @@ const Teacher: React.FC = () => {
     }
   };
 
+  // Chat History State
+  const [viewingChatStudentId, setViewingChatStudentId] = useState<number | null>(null);
+  const [studentConversations, setStudentConversations] = useState<any[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [selectedConvId, setSelectedConvId] = useState<number | null>(null);
+
+  const fetchStudentChats = async (studentId: number) => {
+    setViewingChatStudentId(studentId);
+    setChatLoading(true);
+    setStudentConversations([]);
+    setSelectedConvId(null);
+    try {
+      const response = await fetch(`http://localhost:8000/teacher/students/${studentId}/conversations`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setStudentConversations(data.conversations || []);
+        const modal = document.getElementById('chat_modal') as HTMLDialogElement;
+        if (modal) modal.showModal();
+      } else {
+        alert("Failed to fetch student chats");
+      }
+    } catch (error) {
+      console.error('Failed to fetch chats:', error);
+      alert("Error fetching student chats");
+    } finally {
+      setChatLoading(false);
+    }
+  };
   // API calls
   const getToken = () => localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
 
@@ -655,6 +685,18 @@ const Teacher: React.FC = () => {
                               )}
                               Analyze
                             </button>
+                            <button
+                              onClick={() => fetchStudentChats(student.student_id)}
+                              disabled={viewingChatStudentId === student.student_id}
+                              className="btn btn-sm btn-ghost text-[#8B9D83] hover:bg-[#8B9D83]/10 gap-2"
+                            >
+                              {viewingChatStudentId === student.student_id ? (
+                                <span className="loading loading-spinner loading-xs"></span>
+                              ) : (
+                                <Eye size={16} />
+                              )}
+                              Chats
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -1005,7 +1047,7 @@ const Teacher: React.FC = () => {
                 <div className="stat bg-white rounded-xl shadow-sm border border-[#8B9D83]/10">
                   <div className="stat-title text-[#4A4A4A]/60">Accuracy</div>
                   <div className={`stat-value ${insightData.stats.accuracy_percent >= 70 ? 'text-green-600' :
-                      insightData.stats.accuracy_percent >= 50 ? 'text-yellow-600' : 'text-red-600'
+                    insightData.stats.accuracy_percent >= 50 ? 'text-yellow-600' : 'text-red-600'
                     }`}>{insightData.stats.accuracy_percent}%</div>
                 </div>
                 <div className="stat bg-white rounded-xl shadow-sm border border-[#8B9D83]/10">
@@ -1058,6 +1100,108 @@ const Teacher: React.FC = () => {
                     </ul>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <form method="dialog" className="modal-backdrop">
+          <button>close</button>
+        </form>
+      </dialog>
+
+      {/* Chat History Modal */}
+      <dialog id="chat_modal" className="modal">
+        <div className="modal-box w-11/12 max-w-5xl bg-[#FDFBF7] text-[#4A4A4A] max-h-[90vh]">
+          <form method="dialog">
+            <button className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+          </form>
+
+          <div className="flex items-center gap-3 border-b border-[#8B9D83]/20 pb-4 mb-4">
+            <Eye className="w-8 h-8 text-[#8B9D83]" />
+            <div>
+              <h3 className="font-bold text-2xl text-[#8B9D83]">Student Chat History</h3>
+              <p className="text-[#4A4A4A]/60">{studentConversations.length} conversation(s) found</p>
+            </div>
+          </div>
+
+          {chatLoading ? (
+            <div className="flex justify-center py-12">
+              <span className="loading loading-spinner loading-lg text-[#8B9D83]"></span>
+            </div>
+          ) : studentConversations.length === 0 ? (
+            <div className="text-center py-12">
+              <FileText className="w-16 h-16 mx-auto text-[#4A4A4A]/30 mb-4" />
+              <p className="text-[#4A4A4A]/60">No conversations found for this student.</p>
+            </div>
+          ) : (
+            <div className="flex gap-4 h-[60vh]">
+              {/* Conversation List */}
+              <div className="w-1/3 border-r border-[#8B9D83]/20 pr-4 overflow-y-auto">
+                <h4 className="font-bold text-sm text-[#4A4A4A]/70 mb-3 uppercase tracking-wider">Sessions</h4>
+                <div className="space-y-2">
+                  {studentConversations.map((conv: any) => (
+                    <button
+                      key={conv.id}
+                      onClick={() => setSelectedConvId(conv.id)}
+                      className={`w-full text-left p-3 rounded-lg transition-all ${selectedConvId === conv.id
+                          ? 'bg-[#8B9D83] text-white'
+                          : 'bg-white hover:bg-[#8B9D83]/10'
+                        }`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold">Session #{conv.id}</span>
+                        {conv.has_wrong_answers ? (
+                          <span className={`text-xs px-2 py-0.5 rounded ${selectedConvId === conv.id ? 'bg-red-200 text-red-800' : 'bg-red-100 text-red-700'}`}>Has Errors</span>
+                        ) : (
+                          <span className={`text-xs px-2 py-0.5 rounded ${selectedConvId === conv.id ? 'bg-green-200 text-green-800' : 'bg-green-100 text-green-700'}`}>All Correct</span>
+                        )}
+                      </div>
+                      <p className={`text-xs mt-1 ${selectedConvId === conv.id ? 'text-white/70' : 'text-[#4A4A4A]/50'}`}>
+                        {new Date(conv.started_at).toLocaleDateString()} • {conv.messages?.length || 0} msgs
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Message View */}
+              <div className="flex-1 overflow-y-auto pl-4">
+                {selectedConvId ? (
+                  <div className="space-y-3">
+                    {studentConversations.find((c: any) => c.id === selectedConvId)?.messages?.map((msg: any) => (
+                      <div key={msg.id} className={`chat ${msg.role === 'user' ? 'chat-end' : 'chat-start'}`}>
+                        <div className="chat-header text-xs mb-1">
+                          {msg.role === 'user' ? 'Student' : 'StoryBot'}
+                          {msg.role === 'user' && (
+                            msg.is_wrong ? (
+                              <span className="ml-2 badge badge-error badge-xs">WRONG</span>
+                            ) : msg.content !== 'Start my lesson' && (
+                              <span className="ml-2 badge badge-success badge-xs">CORRECT</span>
+                            )
+                          )}
+                          {msg.difficulty && <span className="ml-2 badge badge-ghost badge-xs">{msg.difficulty}</span>}
+                        </div>
+                        <div
+                          className={`chat-bubble text-sm whitespace-pre-wrap ${msg.role === 'user'
+                              ? msg.is_wrong
+                                ? 'bg-red-100 text-red-900'
+                                : 'bg-[#8B9D83]/20 text-[#4A4A4A]'
+                              : 'bg-[#8B4F47]/10 text-[#4A4A4A]'
+                            }`}
+                        >
+                          {msg.content}
+                        </div>
+                        <div className="chat-footer text-xs opacity-50">
+                          {new Date(msg.created_at).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full text-[#4A4A4A]/50">
+                    <p>Select a session to view messages</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
