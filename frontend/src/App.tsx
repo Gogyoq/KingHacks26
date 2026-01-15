@@ -407,7 +407,11 @@ const App: React.FC = () => {
             <div className="flex justify-between items-center h-16">
               {/* Logo */}
               <div className="flex items-center gap-3">
-                <div><BookOpen className="w-8 h-8 text-[#8B4F47]" /></div>
+                <div><img 
+              src="/logo.png" 
+              alt="Storyteller AI Logo" 
+              className="w-12 h-12 rounded-3x1 shadow-2xl border-3 border-white"
+            /></div>
                 <span className="text-xl font-bold text-[#4A4A4A]">StoryTeller AI</span>
                 {/* Role Badge */}
                 {isLoggedIn && currentUser && (
