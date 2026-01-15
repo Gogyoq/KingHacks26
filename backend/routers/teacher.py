@@ -1380,7 +1380,7 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
                 sc.student_id,
                 COUNT(DISTINCT sc.id) as total_sessions,
                 MAX(sc.last_message_at) as last_active,
-                COUNT(cm.id) as total_answers,
+                COUNT(CASE WHEN cm.content != 'Start my lesson' THEN 1 END) as total_answers,
                 SUM(CASE WHEN cm.is_wrong = 1 THEN 1 ELSE 0 END) as wrong_answers
             FROM student_conversations sc
             LEFT JOIN conversation_messages cm ON sc.id = cm.conversation_id AND cm.role = 'user'
