@@ -14,6 +14,19 @@ from typing import Optional
 from pathlib import Path
 import httpx
 
+def flag_student_as_needing_help(student_id: int):
+    """Mark a student account as needing help."""
+    try:
+        conn = sqlite3.connect(ACCOUNTS_DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE accounts SET flagged_as_needing_help = 1 WHERE id = ?", (student_id,))
+        conn.commit()
+        conn.close()
+        print(f"Flagged student {student_id} as needing help")
+    except Exception as e:
+        print(f"Error flagging student: {e}")
+
+
 # Initialize router
 router = APIRouter(prefix="/student", tags=["Student"])
 
@@ -646,6 +659,10 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)
             print(f"Student message to thread {current_thread_id}: {request.message}")
 
             # Save user message to conversation if we have one
+            # NOTE: We skip saving here if we're in the grading block later, but tricky...
+            # Actually, let's save normally here as NOT wrong, and UPDATE it to wrong if penalized later?
+            # Or better: don't save here, save in logic branches?
+            # Existing code saves here. Let's keep it but handle the update in the penalty block.
             if conversation_id:
                 save_message_to_conversation(conversation_id, 'user', request.message, is_wrong=False)
 
@@ -759,9 +776,51 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other 
                 stored_data = thread_expected_answers.get(current_thread_id)
 
                 if stored_data:
+                    # 3.0 Check for help keywords
+                    help_keywords = ["help", "hint", "stuck", "idk", "i don't know", "confused", "hard", "don't understand", "dunno"]
+                    if any(keyword in request.message.lower() for keyword in help_keywords):
+                        stored_data['help_used'] = True
+                        print(f"Marked help used for thread {current_thread_id} (keyword detection)")
+                    
                     expected = stored_data['expected_answer']
                     is_correct = check_answer(request.message, expected)
                     print(f"Answer check: '{request.message}' vs expected '{expected}' = {is_correct}")
+
+                    # 3.1 Apply penalty if help was used
+                    if is_correct and stored_data.get('help_used'):
+                        print("Correct answer BUT help was used - marking as wrong/no credit")
+                        # Mark as wrong in DB even though they got it right eventually
+                        if conversation_id:
+                            # Flag student as needing help PERMANENTLY
+                            if user_id:
+                                flag_student_as_needing_help(user_id)
+                                
+                            try:
+                                # Update the LAST user message (which we just saved above) to be WRONG
+                                conn = sqlite3.connect('chat_history.db')
+                                c = conn.cursor()
+                                c.execute("""
+                                    UPDATE conversation_messages 
+                                    SET is_wrong = 1 
+                                    WHERE id = (
+                                        SELECT id FROM conversation_messages 
+                                        WHERE conversation_id = ? AND role = 'user' 
+                                        ORDER BY id DESC LIMIT 1
+                                    )
+                                """, (conversation_id,))
+                                
+                                # And flag conversation
+                                c.execute("UPDATE student_conversations SET has_wrong_answers = 1 WHERE id = ?", (conversation_id,))
+                                conn.commit()
+                                conn.close()
+                                print("Updated message to wrong due to help penalty")
+                            except Exception as e:
+                                print(f"Error applying help penalty: {e}")
+                        
+                        # Reset help_used since they answered this question (even if penalized)
+                        # Actually, wait - let the normal flow proceed to generate new story
+                        # But we treat it as "correct" for flow control (new story), just "wrong" for grading.
+                        pass
                 else:
                     # No stored answer, assume correct to continue
                     is_correct = True
@@ -1212,6 +1271,11 @@ async def get_hint(conversation_id: int, authorization: Optional[str] = Header(N
         # Create a detailed hint based on the question type
         detailed_hint = f"{basic_hint}\n\nThink about the problem step by step. What operation do you need to use?"
 
+        # Mark help as used for this thread
+        if thread_id in thread_expected_answers:
+            thread_expected_answers[thread_id]['help_used'] = True
+            print(f"Marked help used for thread {thread_id} (hint button)")
+
         return {
             "hint": detailed_hint,
             "question": question
@@ -1261,14 +1325,24 @@ async def solve_question(conversation_id: int, authorization: Optional[str] = He
         question = stored_data.get('question', '')
         hint = stored_data.get('hint', '')
 
+        # Mark help as used for this thread
+        if thread_id in thread_expected_answers:
+            thread_expected_answers[thread_id]['help_used'] = True
+            print(f"Marked help used for thread {thread_id} (solve button)")
+
         # Record solve usage
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
         c.execute("""
             UPDATE student_conversations
-            SET solves_used = COALESCE(solves_used, 0) + 1
+            SET solves_used = COALESCE(solves_used, 0) + 1,
+                has_wrong_answers = 1
             WHERE id = ?
         """, (conversation_id,))
+
+        # Flag student as needing help since they used solve
+        if user_id:
+            flag_student_as_needing_help(user_id)
 
         # Also save a message indicating the student requested the solution
         c.execute(

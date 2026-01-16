@@ -1371,7 +1371,7 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
         accounts_conn = sqlite3.connect(ACCOUNTS_DB_PATH)
         accounts_conn.row_factory = sqlite3.Row
         ac = accounts_conn.cursor()
-        ac.execute("SELECT id, username, full_name FROM accounts WHERE account_type = 'student'")
+        ac.execute("SELECT id, username, full_name, flagged_as_needing_help FROM accounts WHERE account_type = 'student'")
         all_students = ac.fetchall()
         accounts_conn.close()
 
@@ -1414,6 +1414,10 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
                 else:
                     status = "needs_help"
                 
+                # OVERRIDE: If flagged as needing help (asked for help), set status to needs_help
+                if account['flagged_as_needing_help']:
+                    status = "needs_help"
+                
                 students.append({
                     "student_id": student_id,
                     "username": account['username'],
@@ -1432,7 +1436,7 @@ async def get_dashboard_students(current_user: User = Depends(get_current_user))
                     "total_sessions": 0,
                     "accuracy_percent": 0,
                     "last_active": None,
-                    "status": "good"  # Default status for new students
+                    "status": "needs_help" if account['flagged_as_needing_help'] else "good"  # Default status for new students (unless flagged)
                 })
 
         # Sort by last_active (None values last)
@@ -1615,7 +1619,7 @@ async def get_student_conversations(student_id: int, current_user: User = Depend
 
         # Get conversations
         c.execute("""
-            SELECT id, started_at, last_message_at, has_wrong_answers, thread_id
+            SELECT id, started_at, last_message_at, has_wrong_answers, thread_id, hints_used, solves_used
             FROM student_conversations
             WHERE student_id = ?
             ORDER BY last_message_at DESC

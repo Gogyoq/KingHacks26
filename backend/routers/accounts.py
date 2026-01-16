@@ -37,7 +37,8 @@ def init_db():
             hashed_password TEXT NOT NULL,
             account_active INTEGER NOT NULL DEFAULT 1,
             account_type TEXT NOT NULL DEFAULT 'student',
-            assistant_id TEXT NOT NULL DEFAULT ''
+            assistant_id TEXT NOT NULL DEFAULT '',
+            flagged_as_needing_help INTEGER NOT NULL DEFAULT 0
         );
         """
     )
@@ -47,6 +48,9 @@ def init_db():
     columns = [col[1] for col in c.fetchall()]
     if 'assistant_id' not in columns:
         c.execute("ALTER TABLE accounts ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
+    
+    if 'flagged_as_needing_help' not in columns:
+        c.execute("ALTER TABLE accounts ADD COLUMN flagged_as_needing_help INTEGER NOT NULL DEFAULT 0")
 
     conn.commit()
     conn.close()
