@@ -656,6 +656,37 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)
                 # Send thread_id and conversation_id first
                 yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': current_thread_id, 'conversation_id': conversation_id})}\n\n"
 
+            # SPECIAL HANDLING: "Start my lesson" on an existing thread
+            # If the user sends this (e.g., from page refresh) and it's NOT the first message, 
+            # effectively just "resume" by showing the last bot message again.
+            if not is_first_message and request.message == "Start my lesson":
+                print(f"Resuming conversation {conversation_id} with 'Start my lesson' - REPLAYING LAST MESSAGE")
+                
+                # Get the last bot message content to replay
+                if conversation_id:
+                    conn = sqlite3.connect('chat_history.db')
+                    conn.row_factory = sqlite3.Row
+                    c = conn.cursor()
+                    c.execute("""
+                        SELECT content, difficulty 
+                        FROM conversation_messages 
+                        WHERE conversation_id = ? AND role = 'bot' 
+                        ORDER BY id DESC LIMIT 1
+                    """, (conversation_id,))
+                    last_bot_msg = c.fetchone()
+                    conn.close()
+
+                    if last_bot_msg:
+                        display_text = last_bot_msg['content']
+                        difficulty = last_bot_msg['difficulty'] or 'easy'
+                        
+                        # Yield the content just like a normal response
+                        yield f"data: {json.dumps({'type': 'content', 'content': display_text, 'thread_id': str(current_thread_id), 'conversation_id': conversation_id, 'difficulty': difficulty})}\n\n"
+                        
+                        # Yield done
+                        yield f"data: {json.dumps({'type': 'done', 'thread_id': str(current_thread_id), 'conversation_id': conversation_id, 'was_wrong': False})}\n\n"
+                        return # EXIT here, do not process as an answer or correct/wrong logic
+
             print(f"Student message to thread {current_thread_id}: {request.message}")
 
             # Save user message to conversation if we have one
