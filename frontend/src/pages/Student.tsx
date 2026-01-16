@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import type { ChatContextType } from '../App';
 import { BookOpen, CheckCircle, Sparkles, Lightbulb } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 interface Message {
   role: 'user' | 'bot';
@@ -626,8 +627,8 @@ const Student: React.FC = () => {
                           <div key={i}>
                             {log.role === 'bot' ? (
                               <div className="story-narration">
-                                <div className="text-[#4A4A4A] leading-relaxed whitespace-pre-wrap font-serif text-lg">
-                                  {log.content}
+                                <div className="text-[#4A4A4A] leading-relaxed font-serif text-lg markdown-content">
+                                  <ReactMarkdown>{log.content}</ReactMarkdown>
                                 </div>
                               </div>
                             ) : (
@@ -637,7 +638,9 @@ const Student: React.FC = () => {
                                     You
                                   </div>
                                   <div className="flex-1 bg-[#6B9FA3]/10 border-l-4 border-[#6B9FA3] rounded-r-xl px-5 py-3">
-                                    <p className="text-[#4A4A4A] italic font-medium">"{log.content}"</p>
+                                    <div className="text-[#4A4A4A] italic font-medium markdown-content">
+                                      <ReactMarkdown>{log.content}</ReactMarkdown>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -714,13 +717,13 @@ const Student: React.FC = () => {
                       placeholder={isChatEnded ? "Story has ended" : chatStarted ? "Write your response..." : "Select and start a lesson first"}
                       disabled={isLoading || isChatEnded || !chatStarted}
                       rows={1}
-                      className="w-full h-full px-5 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-2xl focus:outline-none focus:border-[#8B4F47] resize-none text-[#4A4A4A] placeholder-[#4A4A4A]/40 disabled:bg-[#8B9D83]/5 disabled:cursor-not-allowed transition-all duration-300"
+                      className="w-full px-5 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-2xl focus:outline-none focus:border-[#8B4F47] resize-none text-[#4A4A4A] placeholder-[#4A4A4A]/40 disabled:bg-[#8B9D83]/5 disabled:cursor-not-allowed transition-all duration-300"
                     />
                   </div>
                   <button
                     onClick={sendMessage}
                     disabled={isLoading || isChatEnded || !chatStarted || !message.trim()}
-                    className="px-7 py-3 bg-[#8B4F47] text-white font-semibold rounded-2xl hover:bg-[#A0605A] transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center gap-2"
+                    className="px-6 py-3 bg-[#8B4F47] text-white font-semibold rounded-2xl hover:bg-[#A0605A] transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center gap-2"
                   >
                     {isLoading ? (
                       <span className="loading loading-spinner loading-sm"></span>
@@ -756,6 +759,52 @@ const Student: React.FC = () => {
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(10px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+        .markdown-content p {
+          margin: 0;
+          white-space: pre-wrap;
+        }
+        .markdown-content strong {
+          font-weight: 700;
+        }
+        .markdown-content em {
+          font-style: italic;
+        }
+        .markdown-content ul, .markdown-content ol {
+          margin: 0.5em 0;
+          padding-left: 1.5em;
+        }
+        .markdown-content li {
+          margin: 0.25em 0;
+        }
+        .markdown-content code {
+          background-color: rgba(139, 157, 131, 0.1);
+          padding: 0.2em 0.4em;
+          border-radius: 3px;
+          font-family: monospace;
+          font-size: 0.9em;
+        }
+        .markdown-content pre {
+          background-color: rgba(139, 157, 131, 0.1);
+          padding: 1em;
+          border-radius: 6px;
+          overflow-x: auto;
+          margin: 1em 0;
+        }
+        .markdown-content pre code {
+          background-color: transparent;
+          padding: 0;
+        }
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+          margin-top: 1em;
+          margin-bottom: 0.5em;
+          font-weight: 700;
+        }
+        .markdown-content blockquote {
+          border-left: 4px solid rgba(139, 157, 131, 0.3);
+          padding-left: 1em;
+          margin: 1em 0;
+          color: rgba(74, 74, 74, 0.8);
         }
       `}</style>
     </div >
