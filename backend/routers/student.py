@@ -741,7 +741,7 @@ YOU MUST USE DIFFICULTY: "{next_difficulty}"
 
 REMINDER: Only use concepts and operations explicitly taught in the materials. Do NOT introduce division, multiplication, fractions, or any other operations not covered.
 
-Congratulate them briefly, then continue with a NEW story and a NEW question at {next_difficulty} difficulty using ONLY concepts from the teaching materials.
+Congratulate them briefly, then continue with the same story and a NEW question at {next_difficulty} difficulty using ONLY concepts from the teaching materials.
 
 IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other text):
 {{"story": "your story here", "question": "your question here", "expected_answer": "the answer", "difficulty": "{next_difficulty}", "hint": "a helpful hint"}}"""
