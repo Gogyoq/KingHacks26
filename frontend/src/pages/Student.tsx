@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import type { ChatContextType } from '../App';
-import { BookOpen, CheckCircle, Sparkles, Lightbulb } from 'lucide-react';
+import { BookOpen, CheckCircle, Sparkles, Lightbulb, ArrowLeft } from 'lucide-react';
 import LoadingAnimation from '../components/LoadingAnimation';
 
 interface Message {
@@ -37,7 +37,12 @@ const Student: React.FC = () => {
   const [hintLoading, setHintLoading] = useState(false);
   const [solveLoading, setSolveLoading] = useState(false);
   const [solveEnabled, setSolveEnabled] = useState(true);
-  const [chatStarted, setChatStarted] = useState(false);
+  const [chatStarted, setChatStarted] = useState(false); // Used to show/hide the chat UI area
+
+  // New states for prefetch logic
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(false); // True while fetching the FIRST message silently
+  const [showChat, setShowChat] = useState(false); // True when user clicks "Begin Story" OR if history exists
 
   const storyEndRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +68,7 @@ const Student: React.FC = () => {
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
     if (!token) return;
 
+    setHistoryLoading(true);
     try {
       const response = await fetch(`http://localhost:8000/student/conversations/lesson/${fileId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -84,15 +90,24 @@ const Student: React.FC = () => {
           setThreadId(conv?.thread_id || null);
           setChatLog(chatLogMessages);
           setIsChatEnded(conv?.ended_at ? true : false);
-          setChatStarted(chatLogMessages.length > 0);
+
+          if (chatLogMessages.length > 0) {
+            setChatStarted(true);
+            setShowChat(true); // Show immediately if history exists
+          } else {
+            setChatStarted(false);
+            setShowChat(false); // Don't show yet, wait for prefetch
+          }
         }
       } else {
         if (selectedLessonId === fileId) {
+          // No conversation found
           setConversationId(null);
           setThreadId(null);
           setChatLog([]);
           setIsChatEnded(false);
           setChatStarted(false);
+          setShowChat(false);
         }
       }
     } catch (error) {
@@ -103,13 +118,25 @@ const Student: React.FC = () => {
         setChatLog([]);
         setIsChatEnded(false);
         setChatStarted(false);
+        setShowChat(false);
       }
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
   const handleLessonSelect = async (lessonId: number, lessonStarted: boolean) => {
     // If clicking the already selected lesson, do nothing (or we could refresh)
     if (lessonId === selectedLessonId) return;
+
+    // Clear current chat state immediately to prevent "flicker" of old lesson content
+    setChatLog([]);
+    setConversationId(null);
+    setThreadId(null);
+    setIsChatEnded(false);
+    setChatStarted(false);
+    setShowChat(false); // Reset show state
+    setIsPreparing(false); // Reset preparing state
 
     // Always call startLesson to ensure exclusive sync (Backboard wipe + upload)
     await handleStartLesson(lessonId);
@@ -138,10 +165,9 @@ const Student: React.FC = () => {
         if (selectedLessonId === null && fetchedLessons.length > 0) {
           const firstStartedLesson = fetchedLessons.find((l: Lesson) => l.started);
           if (firstStartedLesson) {
-            // For initial load, we trust the state or let the user click to sync if needed.
-            // Or we could force sync the first time.
-            // Let's just set ID for now to avoid auto-triggering on every page load.
-            setSelectedLessonId(firstStartedLesson.id);
+            // REMOVED AUTO-SELECT: User should explicitly choose or use "Continue" if we had that feature.
+            // This keeps the "Select a lesson" state clear and avoids confusion.
+            // setSelectedLessonId(firstStartedLesson.id);
           }
         }
       }
@@ -188,6 +214,18 @@ const Student: React.FC = () => {
     }
   };
 
+  const handleBackToLibrary = () => {
+    // Clear all chat-related state to return to the initial "Select a lesson" view
+    setSelectedLessonId(null);
+    setConversationId(null);
+    setThreadId(null);
+    setChatLog([]);
+    setIsChatEnded(false);
+    setChatStarted(false);
+    setShowChat(false);
+    setIsPreparing(false);
+  };
+
   const handleEndChat = async () => {
     if (!conversationId) {
       alert('No active chat to end');
@@ -212,8 +250,15 @@ const Student: React.FC = () => {
           throw new Error(error.detail || 'Failed to end chat');
         }
 
-        setIsChatEnded(true);
-        alert('Chat session ended successfully!');
+        // Successfully ended logic:
+        alert('Chat session ended. You can start a new session now.');
+        
+        // Reset state so user goes back to library and can start fresh
+        handleBackToLibrary();
+        
+        // Refresh lessons list
+        fetchLessons();
+
       } catch (err: any) {
         console.error('Error ending chat:', err);
         alert('Failed to end chat session: ' + (err.message || 'Unknown error'));
@@ -221,24 +266,28 @@ const Student: React.FC = () => {
     }
   };
 
-  // Start a new chat session automatically
-  const handleStartChat = async (retryCount = 0) => {
-    if ((!selectedLessonId || isLoading || isChatEnded) && retryCount === 0) return;
+  // Prefetch the first message if logic dictates
+  useEffect(() => {
+    // Only prefetch if:
+    // 1. A lesson is selected
+    // 2. History loading is done
+    // 3. Chat log is empty (no previous history)
+    // 4. Not already preparing
+    // 5. Chat is not ended
+    if (selectedLessonId && !historyLoading && chatLog.length === 0 && !isPreparing && !isChatEnded) {
+      prepareFirstMessage();
+    }
+  }, [selectedLessonId, historyLoading, chatLog, isPreparing, isChatEnded]);
 
-    // Max retries for indexing race condition
-    const MAX_RETRIES = 5;
-    let shouldRetry = false;
+  const prepareFirstMessage = async (retryCount = 0) => {
+    // Double check conditions to be safe
+    if (!selectedLessonId || isChatEnded) return;
+
     const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
-    if (!token) {
-      alert('Please log in to start learning');
-      return;
-    }
+    if (!token) return;
 
-    if (retryCount === 0) {
-      setIsLoading(true);
-      // Add placeholder for bot response only on first attempt
-      setChatLog([{ role: 'bot', content: '' }]);
-    }
+    // Start preparing
+    if (retryCount === 0) setIsPreparing(true);
 
     try {
       const response = await fetch('http://localhost:8000/student/chat', {
@@ -262,6 +311,8 @@ const Student: React.FC = () => {
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let accumulatedContent = '';
+      let threadIdInternal: string | null = null;
+      let conversationIdInternal: number | null = null;
 
       if (reader) {
         while (true) {
@@ -276,55 +327,38 @@ const Student: React.FC = () => {
               const data = JSON.parse(line.slice(6));
 
               if (data.type === 'thread_id') {
-                setThreadId(data.thread_id);
+                threadIdInternal = data.thread_id;
                 if (data.conversation_id) {
-                  setConversationId(data.conversation_id);
+                  conversationIdInternal = data.conversation_id;
                 }
               } else if (data.type === 'content') {
                 accumulatedContent += data.content;
-                setChatLog([{ role: 'bot', content: accumulatedContent }]);
               } else if (data.type === 'done') {
-                if (data.thread_id) {
-                  setThreadId(data.thread_id);
-                }
-                setChatStarted(true);
+                // When done, we update the state with the FULL message
+                setThreadId(threadIdInternal || data.thread_id);
+                if (conversationIdInternal) setConversationId(conversationIdInternal);
+
+                setChatLog([{ role: 'bot', content: accumulatedContent }]);
+                setChatStarted(true); // Content is ready
+                setIsPreparing(false); // Done preparing
               } else if (data.type === 'error') {
-                console.error('Error from server:', data.error);
-
-                // Check for HTTP 400 (Backboard indexing race condition)
-                if (data.error.includes('HTTP 400') && retryCount < MAX_RETRIES) {
-                  console.log(`Hit indexing race condition, retrying... (${retryCount + 1}/${MAX_RETRIES})`);
-                  setChatLog([{ role: 'bot', content: `Preparing your lesson... please wait (${retryCount + 1})...` }]);
-
-                  shouldRetry = true;
-                  break; // Break the inner loop, handling retry outside
-                }
-
-                setChatLog([{ role: 'bot', content: `Error: ${data.error}` }]);
+                // Handle error... (similar retry logic could go here if needed)
+                console.error('Error from server during prefetch:', data.error);
+                setIsPreparing(false);
               }
             }
           }
-          // Break outer loop if retrying
-          if (shouldRetry) break;
         }
       }
-
-      if (shouldRetry) {
-        // Exponential backoff: 2s, 4s, 8s...
-        const waitTime = 2000 * Math.pow(1.5, retryCount);
-        setTimeout(() => handleStartChat(retryCount + 1), waitTime);
-      }
-
     } catch (err) {
-      console.error('Start chat failed', err);
-      // Also retry on network failures if needed, but primarily focusing on the 400 error
-      setChatLog([{ role: 'bot', content: 'Error: Failed to start lesson' }]);
-    } finally {
-      // Only turn off loading if NOT retrying
-      if (!shouldRetry) {
-        setIsLoading(false);
-      }
+      console.error('Prefetch failed', err);
+      setIsPreparing(false);
     }
+  };
+
+  // User clicks "Begin Story" - just reveal the chat
+  const handleStartChat = () => {
+    setShowChat(true);
   };
 
   const handleGetHint = async () => {
@@ -572,6 +606,15 @@ const Student: React.FC = () => {
               <div className="px-8 py-6 border-b border-[#8B9D83]/20 bg-gradient-to-r from-[#8B9D83]/10 to-[#6B9FA3]/10">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
+                    {selectedLessonId && (
+                      <button
+                        onClick={handleBackToLibrary}
+                        className="mr-2 p-2 rounded-full hover:bg-white/20 text-[#4A4A4A] transition-colors"
+                        title="Back to Library"
+                      >
+                        <ArrowLeft className="w-6 h-6" />
+                      </button>
+                    )}
                     <div className="w-12 h-12 bg-gradient-to-br from-[#8B9D83] to-[#6B9FA3] rounded-full flex items-center justify-center">
                       <BookOpen className="w-6 h-6" />
                     </div>
@@ -593,14 +636,15 @@ const Student: React.FC = () => {
 
               {/* Story Content */}
               <div className="flex-1 overflow-y-auto px-8 py-6 custom-scrollbar">
-                {startingLesson ? (
+                {startingLesson || historyLoading || isPreparing ? (
                   <div className="flex flex-col items-center justify-center h-full">
                     <LoadingAnimation
                       message="Opening this book..."
                       subMessage="Preparing your personalized lesson adventure."
                     />
                   </div>
-                ) : chatLog.length === 0 && selectedLessonId ? (
+                ) : !showChat && chatLog.length > 0 && selectedLessonId ? (
+                  // Content is READY (prefetched), show the Start Button
                   <div className="flex flex-col items-center justify-center h-full text-center">
                     <div className="mb-6 animate-in zoom-in duration-500">
                       <div className="w-24 h-24 bg-[#8B4F47]/10 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -612,33 +656,14 @@ const Student: React.FC = () => {
                       Click the button below to start your interactive learning adventure.
                     </p>
                     <button
-                      onClick={() => handleStartChat()}
-                      disabled={isLoading}
-                      className="px-8 py-4 bg-[#8B4F47] text-white font-semibold rounded-xl shadow-lg hover:bg-[#A0605A] hover:shadow-xl hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100 flex items-center gap-3"
+                      onClick={handleStartChat}
+                      className="px-8 py-4 bg-[#8B4F47] text-white font-semibold rounded-xl shadow-lg hover:bg-[#A0605A] hover:shadow-xl hover:scale-105 transition-all duration-300 flex items-center gap-3"
                     >
-                      {isLoading ? (
-                        <>
-                          <span className="loading loading-spinner loading-sm"></span>
-                          <span>Starting...</span>
-                        </>
-                      ) : (
-                        <>
-                          <BookOpen className="w-5 h-5" />
-                          <span>Begin Story</span>
-                        </>
-                      )}
+                      <BookOpen className="w-5 h-5" />
+                      <span>Begin Story</span>
                     </button>
-
-                    {isLoading && (
-                      <div className="mt-8">
-                        <LoadingAnimation
-                          message="Connecting to your tutor..."
-                          subMessage="Reviewing the lesson materials."
-                        />
-                      </div>
-                    )}
                   </div>
-                ) : chatLog.length === 0 && !selectedLessonId ? (
+                ) : !selectedLessonId ? (
                   <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
                     <div className="mb-6"><BookOpen className="w-16 h-16 mx-auto text-[#8B9D83]" /></div>
                     <h3 className="text-2xl font-bold text-[#4A4A4A] mb-3">Select a lesson to begin</h3>
@@ -650,7 +675,7 @@ const Student: React.FC = () => {
 
                 {/* Story Narration */}
                 {
-                  chatLog.length > 0 && (
+                  showChat && chatLog.length > 0 && (
                     <div className="prose prose-lg max-w-none">
                       <div className="story-content space-y-6">
                         {chatLog.map((log, i) => (
