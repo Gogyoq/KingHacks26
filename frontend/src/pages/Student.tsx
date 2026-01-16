@@ -108,11 +108,11 @@ const Student: React.FC = () => {
   };
 
   const handleLessonSelect = async (lessonId: number, lessonStarted: boolean) => {
-    if (!lessonStarted) {
-      await handleStartLesson(lessonId);
-      return;
-    }
-    setSelectedLessonId(lessonId);
+    // If clicking the already selected lesson, do nothing (or we could refresh)
+    if (lessonId === selectedLessonId) return;
+
+    // Always call startLesson to ensure exclusive sync (Backboard wipe + upload)
+    await handleStartLesson(lessonId);
   };
 
   const fetchLessons = async () => {
@@ -131,9 +131,16 @@ const Student: React.FC = () => {
         setLessons(fetchedLessons);
 
         // Auto-select the first started lesson when student logs in
+        // IF we want to auto-sync on login, we'd need to call startLesson here too.
+        // But for now, just selecting UI state is safer to avoid accidental wipes on refresh.
+        // However, if the user picks up where they left off, the assistant state *might* be stale 
+        // if they played with another file in a different session (unlikely in this user flow).
         if (selectedLessonId === null && fetchedLessons.length > 0) {
           const firstStartedLesson = fetchedLessons.find((l: Lesson) => l.started);
           if (firstStartedLesson) {
+            // For initial load, we trust the state or let the user click to sync if needed.
+            // Or we could force sync the first time.
+            // Let's just set ID for now to avoid auto-triggering on every page load.
             setSelectedLessonId(firstStartedLesson.id);
           }
         }
@@ -161,9 +168,14 @@ const Student: React.FC = () => {
 
       if (response.ok) {
         const result = await response.json();
-        alert(result.message || 'Lesson started! You can now chat about this topic.');
+        // Removed alert to verify smoother transition
+        // alert(result.message || 'Lesson started! You can now chat about this topic.');
+
+        // Refresh lessons to update "started" status/timestamp
         await fetchLessons();
-        await handleLessonSelect(lessonId, true);
+
+        // Directly set selected ID instead of calling handleLessonSelect (avoids loop)
+        setSelectedLessonId(lessonId);
       } else {
         const error = await response.json();
         alert('Failed to start lesson: ' + (error.detail || 'Unknown error'));

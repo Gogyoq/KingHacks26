@@ -12,6 +12,7 @@ import os
 
 # Get the directory where this file is located, then go up one level to backend/
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "account_info.db")
+BACKBOARD_BASE_URL = "https://app.backboard.io/api"
 
 #THIS NEEDS TO REMAIN PRIVATE, fine for now since we have no user data to secure
 SECRET_KEY = "07491e256c50c40b71a9ddc14d90e0dd438d8863fe00ae90abc3b72878bb0741"
@@ -56,13 +57,31 @@ async def generate_assistant_id():
     load_dotenv() 
     client = BackboardClient(api_key=os.getenv("BACKBOARD_API_KEY"))
     
-    assistant = await client.create_assistant(
-        name="Story Teller Teacher",
-        description="You are a friendly storyteller who is responsible for teaching a student using your stories. Create a new genre every time. The story should continue forever. Occasionally integrate math problems into the story waiting for an answer. Don't provide the answer in the question.",
-    )
+    import asyncio
     
-    return assistant.assistant_id
-    # Copy this ID into student.py as ASSISTANT_ID
+    max_retries = 3
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            assistant = await client.create_assistant(
+                name="Story Teller Teacher",
+                description="You are a friendly storyteller who is responsible for teaching a student using your stories. Create a new genre every time. The story should continue forever. Occasionally integrate math problems into the story waiting for an answer. Don't provide the answer in the question.",
+            )
+            return assistant.assistant_id
+        except Exception as e:
+            print(f"Backboard create_assistant error (attempt {attempt+1}/{max_retries}): {e}")
+            last_error = e
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+            
+    # If we get here, all retries failed.
+    # We could raise an error, OR return a dummy ID if we want to allow login even without AI
+    # For now, let's raise a specific error so the user knows.
+    raise HTTPException(
+        status_code=504, 
+        detail=f"AI Service Timeout: Failed to create assistant after {max_retries} attempts. Backboard might be down."
+    )
 
 class Token(BaseModel):
     access_token: str
@@ -218,38 +237,114 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     
     return user
 
+async def wipe_assistant(assistant_id: str):
+    """
+    Delete ALL documents from an assistant. 
+    Used to ensure a clean slate on login/registration.
+    """
+    load_dotenv() 
+    client = BackboardClient(api_key=os.getenv("BACKBOARD_API_KEY"))
+    import asyncio
+    import httpx
+    
+    print(f"Wiping assistant {assistant_id}...")
+    try:
+        async with httpx.AsyncClient() as http_client:
+            # 1. List docs
+            resp = await http_client.get(
+                f"{BACKBOARD_BASE_URL}/assistants/{assistant_id}/documents",
+                headers={"X-API-Key": os.getenv("BACKBOARD_API_KEY")},
+                timeout=30.0
+            )
+            if resp.status_code == 200:
+                docs = resp.json()
+                print(f"Found {len(docs)} docs to delete in assistant {assistant_id}")
+                for doc in docs:
+                    doc_id = doc.get("document_id")
+                    if doc_id:
+                        await http_client.delete(
+                             f"{BACKBOARD_BASE_URL}/documents/{doc_id}",
+                            headers={"X-API-Key": os.getenv("BACKBOARD_API_KEY")},
+                            timeout=30.0
+                        )
+                print(f"Assistant {assistant_id} wiped successfully.")
+            else:
+                print(f"Failed to list docs for wipe: {resp.status_code}")
+    except Exception as e:
+        print(f"Error wiping assistant: {e}")
+
 @router.post("/signin/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect Username or Password", headers={"WWW-Authenticate": "Bearer"})
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM accounts WHERE username = ?", (form_data.username,))
+    row = c.fetchone()
+    conn.close()
     
+    if not row or not verify_password(form_data.password, row["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Generate access token
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(data={"sub": user.username}, expires_delta= access_token_expires)
-    return {"access_token" : access_token, "token_type" : "bearer"}
-
-@router.post("/register")
-async def register_user(user: UserCreate):
-    if username_exists(user.username):
-        raise HTTPException(status_code=400, detail="Username already exists")
-    if get_user_by_email(user.email):
-        raise HTTPException(status_code=400, detail="Email already exists")
-    if user.account_type not in ["student", "teacher"]:
-        raise HTTPException(status_code=400, detail="Account type must be 'student' or 'teacher'")
+    access_token = create_access_token(
+        data={"sub": row["username"]}, expires_delta=access_token_expires
+    )
     
-    #Generate assistant ID if account passed the checks
-    raw_id = await generate_assistant_id()
-    assistant_id = str(raw_id) 
+    # If student, wipe assistant on login to ensure clean slate
+    if row["account_type"] == "student" and row["assistant_id"]:
+        # Run cleanup in background so login is fast? 
+        # Or wait to ensure it's clean? Waiting is safer for "start lesson" flow immediately after.
+        await wipe_assistant(row["assistant_id"])
+    
+    return {"access_token": access_token, "token_type": "bearer"}
 
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register_user(user: UserCreate):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    
+    # Check if exists
+    c.execute("SELECT id FROM accounts WHERE username = ?", (user.username,))
+    if c.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Username already registered")
+        
     hashed_password = get_password_hash(user.password)
+    
+    # Generate Assistant ID for everyone for simplicity (or just students/teachers)
+    assistant_id = None
+    try:
+        assistant_id = await generate_assistant_id()
+    except HTTPException as e:
+        # If AI generation fails, we might still want to allow registration?
+        # But for this app, AI is critical.
+        print(f"Warning: Failed to create assistant: {e.detail}")
+        if user.account_type == "student": # Critical for students
+             conn.close()
+             raise e
+    except Exception as e:
+        print(f"Error creating assistant: {e}")
+        conn.close()
+        raise HTTPException(status_code=500, detail="Failed to initialize AI assistant")
+
+    # Cast UUID to string for SQLite
+    if assistant_id:
+        assistant_id = str(assistant_id)
+
     c.execute(
-        "INSERT INTO accounts (username, full_name, email, hashed_password, account_active, account_type, assistant_id) VALUES (?, ?, ?, ?, 1, ?, ?)",
+        "INSERT INTO accounts (username, full_name, email, hashed_password, account_type, assistant_id) VALUES (?, ?, ?, ?, ?, ?)",
         (user.username, user.full_name, user.email, hashed_password, user.account_type, assistant_id)
     )
     conn.commit()
     conn.close()
+
+    # New assistant is empty by definition, no need to wipe.
+    
     return {"message": "User created successfully"}
 
 @router.get("/me")

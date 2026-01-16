@@ -349,89 +349,160 @@ def check_answer(student_answer: str, expected_answer: str) -> bool:
 
     return False
 
-async def auto_sync_lessons_to_student(student_id: int, student_assistant_id: str):
-    """Automatically sync all active lessons to the student's assistant on first chat"""
+async def sync_exclusive_lesson(student_id: int, student_assistant_id: str, file_id: int):
+    """
+    Exclusive Mode: Ensure ONLY the selected lesson file exists in the assistant.
+    Removes all other files and uploads/ensures the target file is present.
+    """
+    import asyncio
+    
+    print(f"Starting exclusive sync for student {student_id}, lesson {file_id}")
+    
     try:
-        # Get all active files
+        # 1. Get target file info
         conn = sqlite3.connect('chat_history.db')
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        c.execute("""
-            SELECT f.id, f.file_path, f.original_filename
-            FROM files f
-            WHERE f.is_active = 1 AND f.backboard_status = 'indexed'
-            AND NOT EXISTS (
-                SELECT 1 FROM student_lessons sl
-                WHERE sl.student_id = ? AND sl.file_id = f.id
-            )
-        """, (student_id,))
-        files = c.fetchall()
+        c.execute("SELECT id, file_path, original_filename FROM files WHERE id = ?", (file_id,))
+        target_file = c.fetchone()
+        conn.close()
 
-        print(f"Found {len(files)} lessons to sync for student {student_id}")
+        if not target_file:
+            raise Exception("Target lesson file not found")
 
-        # Upload each file to student's assistant
-        for file_row in files:
-            file_path = Path(file_row["file_path"])
-            if not file_path.exists():
-                print(f"File not found: {file_path}")
-                continue
+        target_path = Path(target_file["file_path"])
+        if not target_path.exists():
+            raise Exception("Target lesson file does not exist on disk")
 
-            # Read file content
-            with open(file_path, "rb") as f:
+        # RETRY WRAPPER for Backboard operations
+        async def backboard_request_with_retry(operation_name, operation_coroutine, max_retries=3):
+            for i in range(max_retries):
+                try:
+                    return await operation_coroutine()
+                except Exception as e:
+                    print(f"{operation_name} failed (attempt {i+1}/{max_retries}): {e}")
+                    if i < max_retries - 1:
+                        await asyncio.sleep(2 * (i + 1))
+                    else:
+                        raise e
+
+        async with httpx.AsyncClient() as http_client:
+            # 2. List all current documents in assistant
+            async def list_docs():
+                resp = await http_client.get(
+                    f"{BACKBOARD_BASE_URL}/assistants/{student_assistant_id}/documents",
+                    headers={"X-API-Key": BACKBOARD_API_KEY},
+                    timeout=30.0
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+            current_docs = await backboard_request_with_retry("List Docs", list_docs)
+            print(f"Found {len(current_docs)} existing docs in assistant")
+
+            # 3. Check if we're already in the desired state (optimization)
+            # If there is exactly 1 doc and it matches our target, we are good.
+            # NOTE: Backboard doc doesn't always have 'original_filename' easily matching without metadata.
+            # But we can compare by checking if we have the file_id mapped.
+            # For robustness, we'll just wipe and re-add unless it's empty.
+            
+            # To avoid re-uploading the SAME file (which takes time), we could check if 
+            # the single existing file matches the target's backboard_doc_id from our DB.
+            # But DB might be out of sync. 
+            # Let's do the safe "Wipe All" approach first.
+            
+            # 4. DELETE ALL existing documents
+            for doc in current_docs:
+                doc_id = doc.get('document_id')
+                if doc_id:
+                    print(f"Removing old doc: {doc_id}")
+                    async def delete_doc():
+                        resp = await http_client.delete(
+                            f"{BACKBOARD_BASE_URL}/documents/{doc_id}",
+                            headers={"X-API-Key": BACKBOARD_API_KEY},
+                            timeout=30.0
+                        )
+                        # 404 is fine (already deleted)
+                        if resp.status_code != 404:
+                            resp.raise_for_status()
+                    
+                    try:
+                        await backboard_request_with_retry(f"Delete {doc_id}", delete_doc)
+                    except Exception as e:
+                        print(f"Warning: Failed to delete doc {doc_id}: {e}")
+
+            # 5. UPLOAD target file
+            print(f"Uploading target file: {target_file['original_filename']}")
+            
+            with open(target_path, "rb") as f:
                 file_content = f.read()
 
-            # Upload to Backboard
-            try:
-                async with httpx.AsyncClient() as http_client:
-                    response = await http_client.post(
-                        f"{BACKBOARD_BASE_URL}/assistants/{student_assistant_id}/documents",
+            async def upload_doc():
+                return await http_client.post(
+                    f"{BACKBOARD_BASE_URL}/assistants/{student_assistant_id}/documents",
+                    headers={"X-API-Key": BACKBOARD_API_KEY},
+                    files={"file": (target_file["original_filename"], file_content)},
+                    timeout=60.0
+                )
+
+            response = await backboard_request_with_retry("Upload File", upload_doc)
+            
+            if response.status_code == 200:
+                doc_data = response.json()
+                backboard_doc_id = doc_data.get("document_id")
+                print(f"Uploaded new lesson: {backboard_doc_id}")
+                
+                # 6. POLL for indexing
+                max_poll = 20
+                for i in range(max_poll):
+                    print(f"Waiting for indexing... ({i+1}/{max_poll})")
+                    status_resp = await http_client.get(
+                        f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}/status",
                         headers={"X-API-Key": BACKBOARD_API_KEY},
-                        files={"file": (file_row["original_filename"], file_content)},
-                        timeout=60.0
+                        timeout=30.0
                     )
-                    if response.status_code == 200:
-                        doc_data = response.json()
-                        backboard_doc_id = doc_data.get("document_id")
-                        print(f"Uploaded lesson to student {student_id}'s assistant: {backboard_doc_id}")
-                        
-                        # POLL until indexed to prevent race conditions (fixes instant 400 error)
-                        import asyncio
-                        max_retries = 20
-                        for i in range(max_retries):
-                            print(f"Waiting for indexing... ({i+1}/{max_retries})")
-                            status_resp = await http_client.get(
-                                f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}/status",
-                                headers={"X-API-Key": BACKBOARD_API_KEY},
-                                timeout=30.0
-                            )
-                            if status_resp.status_code == 200:
-                                status_data = status_resp.json()
-                                status = status_data.get("status")
-                                if status == "indexed":
-                                    print("Lesson fully indexed and ready.")
-                                    break
-                                elif status == "error":
-                                    print("Indexing failed.")
-                                    # We proceed but user might get error
-                                    break
-                            await asyncio.sleep(1) # Wait 1s between checks
+                    if status_resp.status_code == 200:
+                        status = status_resp.json().get("status")
+                        if status == "indexed":
+                            print("Lesson fully indexed.")
+                            break
+                        elif status == "error":
+                            print("Indexing failed.")
+                            break
+                    await asyncio.sleep(1)
+                
+                # Update DB with new doc id
+                conn = sqlite3.connect('chat_history.db')
+                c = conn.cursor()
+                c.execute("""
+                    UPDATE files SET backboard_doc_id = ?, backboard_status = 'indexed' 
+                    WHERE id = ?
+                """, (backboard_doc_id, target_file["id"]))
+                
+                # Update or Insert student_lessons record
+                # We need to know this file is linked to this student
+                c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (student_id, file_id))
+                if c.fetchone():
+                     c.execute("""
+                        UPDATE student_lessons SET backboard_doc_id = ? 
+                        WHERE student_id = ? AND file_id = ?
+                    """, (backboard_doc_id, student_id, file_id))
+                else:
+                    c.execute("""
+                        INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
+                        VALUES (?, ?, ?)
+                    """, (student_id, file_id, backboard_doc_id))
+                
+                conn.commit()
+                conn.close()
+                return backboard_doc_id
+            else:
+                 raise Exception(f"Upload failed: {response.status_code} {response.text}")
 
-                        # Record in database
-                        c.execute("""
-                            INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
-                            VALUES (?, ?, ?)
-                        """, (student_id, file_row["id"], backboard_doc_id))
-                        print(f"Synced lesson: {file_row['original_filename']} -> {backboard_doc_id}")
-                    else:
-                        print(f"Failed to sync {file_row['original_filename']}: {response.status_code}")
-            except Exception as e:
-                print(f"Error syncing {file_row['original_filename']}: {e}")
-
-        conn.commit()
-        conn.close()
-        print(f"Auto-sync complete for student {student_id}")
     except Exception as e:
-        print(f"Error in auto_sync_lessons_to_student: {e}")
+        print(f"Error in sync_exclusive_lesson: {e}")
+        # Re-raise so caller knows it failed
+        raise e
 
 @router.get("/available-lessons")
 async def get_available_lessons(authorization: Optional[str] = Header(None)):
@@ -565,9 +636,9 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(None)
                 if user_id:
                     conversation_id = create_conversation(user_id, current_thread_id, request.file_id)
 
-                # AUTO-SYNC ALL ACTIVE LESSONS TO STUDENT'S ASSISTANT
-                print(f"Auto-syncing active lessons to student {user_id}'s assistant...")
-                await auto_sync_lessons_to_student(user_id, user_assistant_id)
+                # EXCLUSIVE MODE: Sync is handled by start_lesson explicitly.
+                # We do NOT sync here to avoid race conditions or unwanted context switches.
+                # await auto_sync_lessons_to_student(user_id, user_assistant_id)
 
                 # Send thread_id and conversation_id first
                 yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': current_thread_id, 'conversation_id': conversation_id})}\n\n"
@@ -963,77 +1034,27 @@ async def start_lesson(file_id: int, current_user: User = Depends(get_current_us
         conn.close()
         raise HTTPException(status_code=404, detail="Lesson not found or not available")
 
-    # Check if already started
+    # EXCLUSIVE MODE: Always sync this lesson to be the ONLY one in the assistant
+    # regardless of whether it was started before.
+    try:
+        backboard_doc_id = await sync_exclusive_lesson(student_id, student_assistant_id, file_id)
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Failed to sync lesson: {str(e)}")
+
+    # Update or Create DB record (sync_exclusive_lesson also handles some DB updates but good to be sure)
     c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (student_id, file_id))
     existing = c.fetchone()
-
+    
     if existing:
-        # Already started, just update last_accessed
         c.execute("UPDATE student_lessons SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?", (existing["id"],))
-        conn.commit()
-        conn.close()
-        return {"message": "Lesson already started", "lesson_id": existing["id"]}
+        lesson_id = existing["id"]
+    else:
+        # Should have been inserted by sync_exclusive_lesson but we ensure return value
+        c.execute("SELECT id FROM student_lessons WHERE student_id = ? AND file_id = ?", (student_id, file_id))
+        row = c.fetchone()
+        lesson_id = row["id"] if row else 0 # Should not happen
 
-    # Upload document to student's assistant
-    file_path = Path(file_row["file_path"])
-    if not file_path.exists():
-        conn.close()
-        raise HTTPException(status_code=404, detail="Lesson file not found on server")
-
-    # Read file content
-    with open(file_path, "rb") as f:
-        file_content = f.read()
-
-    # Upload to student's assistant
-    backboard_doc_id = None
-    try:
-        async with httpx.AsyncClient() as http_client:
-            response = await http_client.post(
-                f"{BACKBOARD_BASE_URL}/assistants/{student_assistant_id}/documents",
-                headers={"X-API-Key": BACKBOARD_API_KEY},
-                files={"file": (file_row["original_filename"], file_content)},
-                timeout=60.0
-            )
-            if response.status_code == 200:
-                doc_data = response.json()
-                backboard_doc_id = doc_data.get("document_id")
-                print(f"Uploaded lesson to student {student_id}'s assistant: {backboard_doc_id}")
-                
-                # POLL until indexed to prevent race conditions (fixes instant 400 error)
-                import asyncio
-                max_retries = 20
-                for i in range(max_retries):
-                    print(f"Waiting for indexing... ({i+1}/{max_retries})")
-                    status_resp = await http_client.get(
-                        f"{BACKBOARD_BASE_URL}/documents/{backboard_doc_id}/status",
-                        headers={"X-API-Key": BACKBOARD_API_KEY},
-                        timeout=30.0
-                    )
-                    if status_resp.status_code == 200:
-                        status_data = status_resp.json()
-                        status = status_data.get("status")
-                        if status == "indexed":
-                            print("Lesson fully indexed and ready.")
-                            break
-                        elif status == "error":
-                            print("Indexing failed.")
-                            # We proceed but user might get error
-                            break
-                    await asyncio.sleep(1) # Wait 1s between checks
-            else:
-                print(f"Failed to upload lesson: {response.status_code} - {response.text}")
-                conn.close()
-                raise HTTPException(status_code=500, detail="Failed to sync lesson to your learning assistant")
-    except httpx.RequestError as e:
-        conn.close()
-        raise HTTPException(status_code=500, detail=f"Network error: {str(e)}")
-
-    # Record the started lesson
-    c.execute("""
-        INSERT INTO student_lessons (student_id, file_id, backboard_doc_id)
-        VALUES (?, ?, ?)
-    """, (student_id, file_id, backboard_doc_id))
-    lesson_id = c.lastrowid
     conn.commit()
     conn.close()
 

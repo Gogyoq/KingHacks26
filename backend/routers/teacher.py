@@ -65,6 +65,42 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
         conn = sqlite3.connect('chat_history.db')
         c = conn.cursor()
 
+        # --- STRICT CLEANUP: Wipe Teacher Assistant before new batch upload ---
+        # This prevents hitting the 20-file limit and ensures a clean state
+        try:
+            print("Cleaning up Teacher Assistant before upload...")
+            async with httpx.AsyncClient() as client:
+                # 1. List all docs
+                resp = await client.get(
+                    f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
+                    headers={"X-API-Key": BACKBOARD_API_KEY},
+                    timeout=30.0
+                )
+                if resp.status_code == 200:
+                    current_docs = resp.json()
+                    print(f"Found {len(current_docs)} existing docs to delete.")
+                    
+                    # 2. Delete all docs
+                    for doc in current_docs:
+                        doc_id = doc.get('document_id')
+                        if doc_id:
+                            # We don't retry deletions here blindly, but we could.
+                            # For simplicity/speed in this batch op, just try delete.
+                            del_resp = await client.delete(
+                                f"{BACKBOARD_BASE_URL}/documents/{doc_id}",
+                                headers={"X-API-Key": BACKBOARD_API_KEY},
+                                timeout=30.0
+                            )
+                            if del_resp.status_code == 200:
+                                print(f"Deleted old doc: {doc_id}")
+                            elif del_resp.status_code != 404: # Ignore already deleted
+                                print(f"Failed to delete {doc_id}: {del_resp.status_code}")
+                else:
+                    print(f"Failed to list docs for cleanup: {resp.status_code}")
+        except Exception as e:
+            print(f"Warning: Cleanup failed: {e}")
+            # We proceed, but might hit limits if cleanup failed.
+
         for file in files:
             # Create a unique filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -85,28 +121,39 @@ async def upload_files(files: list[UploadFile] = File(...), authorization: Optio
             backboard_status = "not_uploaded"
             upload_error = None
 
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
-                        headers={"X-API-Key": BACKBOARD_API_KEY},
-                        files={"file": (file.filename, file_content)},
-                        timeout=60.0
-                    )
+            import asyncio
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            f"{BACKBOARD_BASE_URL}/assistants/{user_assistant_id}/documents",
+                            headers={"X-API-Key": BACKBOARD_API_KEY},
+                            files={"file": (file.filename, file_content)},
+                            timeout=60.0
+                        )
 
-                    if response.status_code == 200:
-                        doc_data = response.json()
-                        backboard_doc_id = doc_data.get("document_id")
-                        backboard_status = doc_data.get("status", "pending")
-                        print(f"Uploaded to Backboard: {backboard_doc_id} - {backboard_status}")
-                    else:
-                        print(f"Backboard upload failed: {response.status_code} - {response.text}")
-                        backboard_status = "upload_failed"
-                        upload_error = f"Backboard API error: {response.status_code}"
-            except Exception as e:
-                print(f"Backboard upload error: {e}")
-                backboard_status = "upload_error"
-                upload_error = str(e)
+                        if response.status_code == 200:
+                            doc_data = response.json()
+                            backboard_doc_id = doc_data.get("document_id")
+                            backboard_status = doc_data.get("status", "pending")
+                            print(f"Uploaded to Backboard: {backboard_doc_id} - {backboard_status}")
+                            break # Success, exit retry loop
+                        else:
+                            print(f"Backboard upload failed (attempt {attempt+1}/{max_retries}): {response.status_code} - {response.text}")
+                            if attempt == max_retries - 1:
+                                backboard_status = "upload_failed"
+                                upload_error = f"Backboard API error: {response.status_code}"
+                except Exception as e:
+                    print(f"Backboard upload error (attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt == max_retries - 1:
+                        backboard_status = "upload_error"
+                        upload_error = str(e)
+                
+                # Wait before retry if not last attempt
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 * (attempt + 1))
 
             # Save to database with Backboard document ID
             c.execute(
