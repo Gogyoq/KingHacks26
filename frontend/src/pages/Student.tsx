@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import type { ChatContextType } from '../App';
 import { BookOpen, CheckCircle, Sparkles, Lightbulb } from 'lucide-react';
+import LoadingAnimation from '../components/LoadingAnimation';
 
 interface Message {
   role: 'user' | 'bot';
@@ -580,42 +581,60 @@ const Student: React.FC = () => {
 
               {/* Story Content */}
               <div className="flex-1 overflow-y-auto px-8 py-6 custom-scrollbar">
-                {chatLog.length === 0 && selectedLessonId && (
+                {startingLesson ? (
+                  <div className="flex flex-col items-center justify-center h-full">
+                    <LoadingAnimation
+                      message="Opening this book..."
+                      subMessage="Preparing your personalized lesson adventure."
+                    />
+                  </div>
+                ) : chatLog.length === 0 && selectedLessonId ? (
                   <div className="flex flex-col items-center justify-center h-full text-center">
-                    <div className="mb-6"><Sparkles className="w-16 h-16 mx-auto" /></div>
+                    <div className="mb-6 animate-in zoom-in duration-500">
+                      <div className="w-24 h-24 bg-[#8B4F47]/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <Sparkles className="w-12 h-12 text-[#8B4F47]" />
+                      </div>
+                    </div>
                     <h3 className="text-2xl font-bold text-[#4A4A4A] mb-3">Ready to begin your story?</h3>
-                    <p className="text-[#4A4A4A]/70 mb-6 max-w-md">
+                    <p className="text-[#4A4A4A]/70 mb-8 max-w-md mx-auto">
                       Click the button below to start your interactive learning adventure.
                     </p>
                     <button
                       onClick={() => handleStartChat()}
                       disabled={isLoading}
-                      className="px-8 py-4 bg-[#8B4F47] text-white font-semibold rounded-lg shadow-lg hover:bg-[#A0605A] hover:shadow-xl transition-all duration-300 disabled:opacity-50"
+                      className="px-8 py-4 bg-[#8B4F47] text-white font-semibold rounded-xl shadow-lg hover:bg-[#A0605A] hover:shadow-xl hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100 flex items-center gap-3"
                     >
                       {isLoading ? (
-                        <span className="flex items-center gap-2">
+                        <>
                           <span className="loading loading-spinner loading-sm"></span>
-                          Starting...
-                        </span>
+                          <span>Starting...</span>
+                        </>
                       ) : (
-                        'Begin Story'
+                        <>
+                          <BookOpen className="w-5 h-5" />
+                          <span>Begin Story</span>
+                        </>
                       )}
                     </button>
+
+                    {isLoading && (
+                      <div className="mt-8">
+                        <LoadingAnimation
+                          message="Connecting to your tutor..."
+                          subMessage="Reviewing the lesson materials."
+                        />
+                      </div>
+                    )}
                   </div>
-                )}
-
-
-                {
-                  chatLog.length === 0 && !selectedLessonId && (
-                    <div className="flex flex-col items-center justify-center h-full text-center">
-                      <div className="mb-6"><BookOpen className="w-16 h-16 mx-auto" /></div>
-                      <h3 className="text-2xl font-bold text-[#4A4A4A] mb-3">Select a lesson to begin</h3>
-                      <p className="text-[#4A4A4A]/70 max-w-md">
-                        Choose a book from your library on the left to start your learning journey.
-                      </p>
-                    </div>
-                  )
-                }
+                ) : chatLog.length === 0 && !selectedLessonId ? (
+                  <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
+                    <div className="mb-6"><BookOpen className="w-16 h-16 mx-auto text-[#8B9D83]" /></div>
+                    <h3 className="text-2xl font-bold text-[#4A4A4A] mb-3">Select a lesson to begin</h3>
+                    <p className="text-[#4A4A4A]/70 max-w-md mx-auto">
+                      Choose a book from your library on the left to start your learning journey.
+                    </p>
+                  </div>
+                ) : null}
 
                 {/* Story Narration */}
                 {

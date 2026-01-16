@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Lock, Rocket, X, BookOpen, GraduationCap } from 'lucide-react';
+import { Lock, Rocket, X, BookOpen, GraduationCap, Sparkles } from 'lucide-react';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
@@ -42,7 +42,7 @@ const AuthModal = ({
   onLogin: (u: string, p: string, r: boolean) => void;
   onRegister: (f: FormData) => void;
 }) => {
-  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+  const [mode, setMode] = useState<'login' | 'register' | 'quick-start'>(initialMode);
   const modalRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -81,19 +81,19 @@ const AuthModal = ({
             const r = (form.elements.namedItem('rememberMe') as HTMLInputElement).checked;
             onLogin(u, p, r);
           }} className="flex flex-col gap-3">
-            <input 
-              type="text" 
-              name="username" 
-              placeholder="Username" 
-              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50" 
-              required 
+            <input
+              type="text"
+              name="username"
+              placeholder="Username"
+              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+              required
             />
-            <input 
-              type="password" 
-              name="password" 
-              placeholder="Password" 
-              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50" 
-              required 
+            <input
+              type="password"
+              name="password"
+              placeholder="Password"
+              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+              required
             />
             <label className="label cursor-pointer justify-start gap-2">
               <input type="checkbox" name="rememberMe" className="checkbox checkbox-sm border-[#8B9D83]" />
@@ -104,51 +104,102 @@ const AuthModal = ({
             </button>
           </form>
         ) : (
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            const formData = new FormData(e.currentTarget);
-            onRegister(formData);
-          }} className="flex flex-col gap-3">
-            <input 
-              type="text" 
-              name="username" 
-              placeholder="Username" 
-              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50" 
-              required 
-            />
-            <input 
-              type="text" 
-              name="full_name" 
-              placeholder="Full Name" 
-              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50" 
-              required 
-            />
-            <input 
-              type="email" 
-              name="email" 
-              placeholder="Email" 
-              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50" 
-              required 
-            />
-            <input 
-              type="password" 
-              name="password" 
-              placeholder="Password" 
-              className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50" 
-              required 
-            />
-            <select 
-              name="account_type" 
-              className="select select-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A]" 
-              required
-            >
-              <option value="student">Student</option>
-              <option value="teacher">Teacher</option>
-            </select>
-            <button type="submit" className="btn bg-[#8B4F47] hover:bg-[#A0605A] text-white border-none">
-              Create Account
-            </button>
-          </form>
+          <div className="flex flex-col gap-4">
+            {/* Quick vs Standard Toggle */}
+            <div className="flex p-1 bg-[#8B9D83]/10 rounded-lg">
+              <button
+                className={`flex-1 py-1 text-sm font-medium rounded-md transition-all ${mode === 'quick-start' ? 'bg-white text-[#8B4F47] shadow-sm' : 'text-[#4A4A4A]/60 hover:text-[#4A4A4A]'}`}
+                onClick={() => setMode('quick-start')}
+              >
+                Quick Start
+              </button>
+              <button
+                className={`flex-1 py-1 text-sm font-medium rounded-md transition-all ${mode === 'register' ? 'bg-white text-[#8B4F47] shadow-sm' : 'text-[#4A4A4A]/60 hover:text-[#4A4A4A]'}`}
+                onClick={() => setMode('register')}
+              >
+                Full Register
+              </button>
+            </div>
+
+            {mode === 'quick-start' ? (
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.currentTarget);
+                // quick start logic: auto-fill dummy data
+                const username = formData.get('username') as string;
+
+                const fullFormData = new FormData();
+                fullFormData.append('username', username);
+                fullFormData.append('full_name', username); // Use username as name
+                fullFormData.append('email', `${username}@example.com`);
+                fullFormData.append('password', 'password123'); // Default dummy password
+                fullFormData.append('account_type', 'student'); // Default to student
+
+                onRegister(fullFormData);
+              }} className="flex flex-col gap-3">
+                <div className="bg-[#DAA520]/10 p-3 rounded-lg text-xs text-[#A67C4D] flex gap-2">
+                  <Sparkles className="w-4 h-4 flex-shrink-0" />
+                  <span>Great for testing! Just pick a username.</span>
+                </div>
+                <input
+                  type="text"
+                  name="username"
+                  placeholder="Choose a Username"
+                  className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+                  required
+                />
+                <button type="submit" className="btn bg-[#8B4F47] hover:bg-[#A0605A] text-white border-none mt-2">
+                  Start Adventure
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.currentTarget);
+                onRegister(formData);
+              }} className="flex flex-col gap-3">
+                <input
+                  type="text"
+                  name="username"
+                  placeholder="Username"
+                  className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+                  required
+                />
+                <input
+                  type="text"
+                  name="full_name"
+                  placeholder="Full Name"
+                  className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+                  required
+                />
+                <input
+                  type="email"
+                  name="email"
+                  placeholder="Email"
+                  className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+                  required
+                />
+                <input
+                  type="password"
+                  name="password"
+                  placeholder="Password"
+                  className="input input-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A] placeholder:text-[#4A4A4A]/50"
+                  required
+                />
+                <select
+                  name="account_type"
+                  className="select select-bordered bg-white border-[#8B9D83]/30 focus:border-[#8B4F47] text-[#4A4A4A]"
+                  required
+                >
+                  <option value="student">Student</option>
+                  <option value="teacher">Teacher</option>
+                </select>
+                <button type="submit" className="btn bg-[#8B4F47] hover:bg-[#A0605A] text-white border-none">
+                  Create Account
+                </button>
+              </form>
+            )}
+          </div>
         )}
 
         {/* Toggle Section */}
@@ -180,7 +231,7 @@ const App: React.FC = () => {
   const location = useLocation();
   const currentPath = location.pathname;
   const isHomePage = currentPath === '/';
-  
+
   const [isLoggedIn, setIsLoggedIn] = useState(
     !!localStorage.getItem('access_token') || !!sessionStorage.getItem('access_token')
   );
@@ -191,7 +242,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [devAccounts, setDevAccounts] = useState<DevAccount[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  
+
   // Teacher viewing as student state
   const [viewingAsStudent, setViewingAsStudent] = useState(false);
 
@@ -266,39 +317,39 @@ const App: React.FC = () => {
   };
 
   const handleDevSwitch = async (username: string) => {
-  try {
-    const response = await fetch(`${API_BASE_URL}/accounts/dev/switch/${username}`, {
-      method: 'POST',
-    });
-
-    if (response.ok) {
-      const token = await response.json();
-      localStorage.setItem('access_token', token.access_token);
-      sessionStorage.removeItem('access_token');
-      setIsLoggedIn(true);
-      
-      // Fetch user data to determine redirect - same as login flow
-      const userResponse = await fetch(`${API_BASE_URL}/accounts/me`, {
-        headers: { 'Authorization': `Bearer ${token.access_token}` }
+    try {
+      const response = await fetch(`${API_BASE_URL}/accounts/dev/switch/${username}`, {
+        method: 'POST',
       });
-      
-      if (userResponse.ok) {
-        const userData = await userResponse.json();
-        setCurrentUser(userData);
-        setViewingAsStudent(false); // Reset view mode
-        // Clear any existing chat state
-        setChatLog([]);
-        setThreadId(null);
-        setConversationId(null);
-        // Redirect based on account type
-        navigate(userData.account_type === 'teacher' ? '/teacher' : '/student');
-      } else {
-        // Fallback: reload page if can't fetch user data
-        window.location.reload();
+
+      if (response.ok) {
+        const token = await response.json();
+        localStorage.setItem('access_token', token.access_token);
+        sessionStorage.removeItem('access_token');
+        setIsLoggedIn(true);
+
+        // Fetch user data to determine redirect - same as login flow
+        const userResponse = await fetch(`${API_BASE_URL}/accounts/me`, {
+          headers: { 'Authorization': `Bearer ${token.access_token}` }
+        });
+
+        if (userResponse.ok) {
+          const userData = await userResponse.json();
+          setCurrentUser(userData);
+          setViewingAsStudent(false); // Reset view mode
+          // Clear any existing chat state
+          setChatLog([]);
+          setThreadId(null);
+          setConversationId(null);
+          // Redirect based on account type
+          navigate(userData.account_type === 'teacher' ? '/teacher' : '/student');
+        } else {
+          // Fallback: reload page if can't fetch user data
+          window.location.reload();
+        }
       }
-    }
-  } catch (error) {
-    console.error('Failed to switch account:', error);
+    } catch (error) {
+      console.error('Failed to switch account:', error);
     }
   };
 
@@ -322,12 +373,12 @@ const App: React.FC = () => {
 
         setIsLoggedIn(true);
         setAuthModalOpen(false);
-        
+
         // Fetch user data to determine redirect
         const userResponse = await fetch(`${API_BASE_URL}/accounts/me`, {
           headers: { 'Authorization': `Bearer ${token.access_token}` }
         });
-        
+
         if (userResponse.ok) {
           const userData = await userResponse.json();
           setCurrentUser(userData);
@@ -363,11 +414,31 @@ const App: React.FC = () => {
       if (response.ok) {
         const result = await response.json();
         // Switch to login mode automatically after success
-        setAuthMode('login');
-        alert(result.message || 'Registration successful! Please login.');
+        // Switch to login mode automatically after success
+        // If it was a quick start (using default password), verify and auto-login
+        const wasQuickStart = formData.get('password') === 'password123';
+        if (wasQuickStart) {
+          await handleLogin(
+            formData.get('username') as string,
+            'password123',
+            true // Remember me
+          );
+        } else {
+          setAuthMode('login');
+          alert(result.message || 'Registration successful! Please login.');
+        }
       } else {
         try {
+          // If user already exists and it was a quick start, try logging in
           const error = await response.json();
+          if (formData.get('password') === 'password123' && error.detail?.includes('already exists')) {
+            await handleLogin(
+              formData.get('username') as string,
+              'password123',
+              true
+            );
+            return;
+          }
           alert('Registration failed: ' + (error.detail || 'Unknown error'));
         } catch {
           alert('Registration failed: Server error');
@@ -394,8 +465,8 @@ const App: React.FC = () => {
   };
 
   // Determine what to show based on viewing mode
-  const effectiveAccountType = viewingAsStudent && currentUser?.account_type === 'teacher' 
-    ? 'student' 
+  const effectiveAccountType = viewingAsStudent && currentUser?.account_type === 'teacher'
+    ? 'student'
     : currentUser?.account_type;
 
   return (
@@ -407,19 +478,18 @@ const App: React.FC = () => {
             <div className="flex justify-between items-center h-16">
               {/* Logo */}
               <div className="flex items-center gap-3">
-                <div><img 
-              src="/logo.png" 
-              alt="Storyteller AI Logo" 
-              className="w-12 h-12 rounded-3x1 shadow-2xl border-3 border-white"
-            /></div>
+                <div><img
+                  src="/logo.png"
+                  alt="Storyteller AI Logo"
+                  className="w-12 h-12 rounded-3x1 shadow-2xl border-3 border-white"
+                /></div>
                 <span className="text-xl font-bold text-[#4A4A4A]">StoryTeller AI</span>
                 {/* Role Badge */}
                 {isLoggedIn && currentUser && (
-                  <span className={`ml-3 px-3 py-1 rounded-full text-xs font-semibold ${
-                    effectiveAccountType === 'teacher' 
-                      ? 'bg-[#A67C4D]/20 text-[#A67C4D]' 
-                      : 'bg-[#6B9FA3]/20 text-[#6B9FA3]'
-                  }`}>
+                  <span className={`ml-3 px-3 py-1 rounded-full text-xs font-semibold ${effectiveAccountType === 'teacher'
+                    ? 'bg-[#A67C4D]/20 text-[#A67C4D]'
+                    : 'bg-[#6B9FA3]/20 text-[#6B9FA3]'
+                    }`}>
                     {effectiveAccountType === 'teacher' ? <><GraduationCap className="w-4 h-4 inline mr-1" /> Teacher</> : <><BookOpen className="w-4 h-4 inline mr-1 text-[#8B4F47]" /> Student</>}
                   </span>
                 )}
@@ -436,11 +506,10 @@ const App: React.FC = () => {
                         setViewingAsStudent(false);
                         navigate('/teacher');
                       }}
-                      className={`px-3 py-1 rounded text-sm font-medium transition-all ${
-                        !viewingAsStudent
-                          ? 'bg-[#A67C4D] text-white shadow-sm'
-                          : 'text-[#4A4A4A] hover:bg-white/50'
-                      }`}
+                      className={`px-3 py-1 rounded text-sm font-medium transition-all ${!viewingAsStudent
+                        ? 'bg-[#A67C4D] text-white shadow-sm'
+                        : 'text-[#4A4A4A] hover:bg-white/50'
+                        }`}
                     >
                       Teacher
                     </button>
@@ -449,11 +518,10 @@ const App: React.FC = () => {
                         setViewingAsStudent(true);
                         navigate('/student');
                       }}
-                      className={`px-3 py-1 rounded text-sm font-medium transition-all ${
-                        viewingAsStudent
-                          ? 'bg-[#6B9FA3] text-white shadow-sm'
-                          : 'text-[#4A4A4A] hover:bg-white/50'
-                      }`}
+                      className={`px-3 py-1 rounded text-sm font-medium transition-all ${viewingAsStudent
+                        ? 'bg-[#6B9FA3] text-white shadow-sm'
+                        : 'text-[#4A4A4A] hover:bg-white/50'
+                        }`}
                     >
                       Student
                     </button>
@@ -480,11 +548,10 @@ const App: React.FC = () => {
                             <div className="font-semibold text-[#4A4A4A] text-sm">{account.full_name}</div>
                             <div className="text-xs text-[#4A4A4A]/60">@{account.username}</div>
                           </div>
-                          <span className={`text-xs px-2 py-1 rounded ${
-                            account.account_type === 'teacher'
-                              ? 'bg-[#A67C4D]/20 text-[#A67C4D]'
-                              : 'bg-[#6B9FA3]/20 text-[#6B9FA3]'
-                          }`}>
+                          <span className={`text-xs px-2 py-1 rounded ${account.account_type === 'teacher'
+                            ? 'bg-[#A67C4D]/20 text-[#A67C4D]'
+                            : 'bg-[#6B9FA3]/20 text-[#6B9FA3]'
+                            }`}>
                             {account.account_type === 'teacher' ? 'Teacher' : 'Student'}
                           </span>
                         </button>
