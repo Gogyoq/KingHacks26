@@ -590,9 +590,9 @@ const Teacher: React.FC = () => {
 
               <div className="bg-white/60 backdrop-blur-sm rounded-2xl shadow-lg border border-[#8B9D83]/20 p-6">
                 <div className="flex items-center justify-between mb-2">
-                  <TrendingUp className="w-8 h-8 text-[#6B9FA3]" />
+                  <TrendingUp className="w-8 h-8 text-[#8B4F47]" />
                   <div className="text-right">
-                    <p className="text-3xl font-bold text-[#6B9FA3]">
+                    <p className="text-3xl font-bold text-[#4A4A4A]">
                       {statsLoading ? '...' : `${stats?.class_accuracy || 0}%`}
                     </p>
                     <p className="text-sm text-[#4A4A4A]/60">Class Accuracy</p>
@@ -604,7 +604,7 @@ const Teacher: React.FC = () => {
                 <div className="flex items-center justify-between mb-2">
                   <AlertTriangle className="w-8 h-8 text-[#8B4F47]" />
                   <div className="text-right">
-                    <p className="text-3xl font-bold text-[#8B4F47]">
+                    <p className="text-3xl font-bold text-[#4A4A4A]">
                       {statsLoading ? '...' : stats?.students_needing_help || 0}
                     </p>
                     <p className="text-sm text-[#4A4A4A]/60">Need Help</p>
@@ -674,31 +674,46 @@ const Teacher: React.FC = () => {
                             </span>
                           </td>
                           <td className="text-center py-4 px-4">
+                          <div className="flex gap-2 justify-center">
                             <button
                               onClick={() => fetchStudentInsights(student.student_id)}
                               disabled={analyzingStudentId === student.student_id}
-                              className="btn btn-sm btn-ghost text-[#8B4F47] hover:bg-[#8B4F47]/10 gap-2"
+                              className="btn btn-sm bg-[#8B4F47] hover:bg-[#8B4F47]/90 text-white border-none rounded-lg gap-2 disabled:opacity-50 disabled:bg-[#8B4F47] px-4 py-2 min-h-0 h-auto"
+                              aria-label={`Analyze insights for student ${student.student_id}`}
                             >
                               {analyzingStudentId === student.student_id ? (
-                                <span className="loading loading-spinner loading-xs"></span>
+                                <>
+                                  <span className="loading loading-spinner loading-xs" />
+                                  <span className="sr-only">Analyzing...</span>
+                                </>
                               ) : (
-                                <Brain size={16} />
+                                <>
+                                  <Brain size={16} aria-hidden="true" />
+                                  <span>Analyze</span>
+                                </>
                               )}
-                              Analyze
                             </button>
+                            
                             <button
                               onClick={() => fetchStudentChats(student.student_id)}
                               disabled={viewingChatStudentId === student.student_id}
-                              className="btn btn-sm btn-ghost text-[#8B9D83] hover:bg-[#8B9D83]/10 gap-2"
+                              className="btn btn-sm bg-[#8B4F47] hover:bg-[#8B4F47]/90 text-white border-none rounded-lg gap-2 disabled:opacity-50 disabled:bg-[#8B4F47] px-4 py-2 min-h-0 h-auto"
+                              aria-label={`View chats for student ${student.student_id}`}
                             >
                               {viewingChatStudentId === student.student_id ? (
-                                <span className="loading loading-spinner loading-xs"></span>
+                                <>
+                                  <span className="loading loading-spinner loading-xs" />
+                                  <span className="sr-only">Loading chats...</span>
+                                </>
                               ) : (
-                                <Eye size={16} />
+                                <>
+                                  <Eye size={16} aria-hidden="true" />
+                                  <span>Chats</span>
+                                </>
                               )}
-                              Chats
                             </button>
-                          </td>
+                          </div>
+                        </td>
                         </tr>
                       ))}
                     </tbody>

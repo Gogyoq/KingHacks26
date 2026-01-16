@@ -655,7 +655,7 @@ const Student: React.FC = () => {
               {
                 chatStarted && !isChatEnded && (
                   <div className="px-8 py-4 bg-[#8B9D83]/5 border-t border-[#8B9D83]/20">
-                    <div className="flex gap-2 mb-4">
+                    <div className="flex gap-2">
                       <button
                         onClick={handleGetHint}
                         disabled={hintLoading || isLoading}
@@ -698,7 +698,7 @@ const Student: React.FC = () => {
 
               {/* Input Area */}
               <div className="px-8 py-5 bg-gradient-to-t from-[#F5F1E8] to-white/50 border-t border-[#8B9D83]/20">
-                <div className="flex gap-3 items-end">
+                <div className="flex gap-3 items-stretch">
                   <div className="flex-1">
                     <textarea
                       value={message}
@@ -714,14 +714,13 @@ const Student: React.FC = () => {
                       placeholder={isChatEnded ? "Story has ended" : chatStarted ? "Write your response..." : "Select and start a lesson first"}
                       disabled={isLoading || isChatEnded || !chatStarted}
                       rows={1}
-                      className="w-full px-5 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-2xl focus:outline-none focus:border-[#8B4F47] resize-none text-[#4A4A4A] placeholder-[#4A4A4A]/40 disabled:bg-[#8B9D83]/5 disabled:cursor-not-allowed transition-all duration-300"
-                      style={{ minHeight: '48px', maxHeight: '120px' }}
+                      className="w-full h-full px-5 py-3 bg-white border-2 border-[#8B9D83]/30 rounded-2xl focus:outline-none focus:border-[#8B4F47] resize-none text-[#4A4A4A] placeholder-[#4A4A4A]/40 disabled:bg-[#8B9D83]/5 disabled:cursor-not-allowed transition-all duration-300"
                     />
                   </div>
                   <button
                     onClick={sendMessage}
                     disabled={isLoading || isChatEnded || !chatStarted || !message.trim()}
-                    className="px-6 py-3 bg-[#8B4F47] text-white font-semibold rounded-2xl hover:bg-[#A0605A] transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center gap-2"
+                    className="px-7 py-3 bg-[#8B4F47] text-white font-semibold rounded-2xl hover:bg-[#A0605A] transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center gap-2"
                   >
                     {isLoading ? (
                       <span className="loading loading-spinner loading-sm"></span>
@@ -729,9 +728,6 @@ const Student: React.FC = () => {
                       <span>Send</span>
                     )}
                   </button>
-                  <p className="text-xs text-[#4A4A4A]/50 mt-2 text-center">
-                    Press Enter to send • Shift+Enter for new line
-                  </p>
                 </div>
               </div>
             </div>
