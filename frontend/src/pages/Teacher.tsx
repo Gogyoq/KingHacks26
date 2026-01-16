@@ -1167,7 +1167,11 @@ const Teacher: React.FC = () => {
                       <div className="flex justify-between items-center">
                         <span className="font-semibold">Session #{conv.id}</span>
                         {conv.has_wrong_answers ? (
-                          <span className={`text-xs px-2 py-0.5 rounded ${selectedConvId === conv.id ? 'bg-red-200 text-red-800' : 'bg-red-100 text-red-700'}`}>Has Errors</span>
+                          (conv.hints_used > 0 || conv.solves_used > 0) ? (
+                            <span className={`text-xs px-2 py-0.5 rounded ${selectedConvId === conv.id ? 'bg-orange-200 text-orange-800' : 'bg-orange-100 text-orange-700'}`}>Help Used</span>
+                          ) : (
+                            <span className={`text-xs px-2 py-0.5 rounded ${selectedConvId === conv.id ? 'bg-red-200 text-red-800' : 'bg-red-100 text-red-700'}`}>Has Errors</span>
+                          )
                         ) : (
                           <span className={`text-xs px-2 py-0.5 rounded ${selectedConvId === conv.id ? 'bg-green-200 text-green-800' : 'bg-green-100 text-green-700'}`}>All Correct</span>
                         )}
